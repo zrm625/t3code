@@ -1,5 +1,4 @@
-// Effect's FileSystem cannot probe a Unix socket, so this uses node:net for that one check.
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off - Effect cannot tell whether a Unix socket is live.
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -18,7 +17,7 @@ import {
   rejectRequestsUntilServing,
 } from "../httpResponseErrorGuard.ts";
 
-/** Opt-in path where `/mcp` is also served, for hosts that forbid MCP over loopback TCP. */
+// Opt-in, for hosts that forbid MCP over loopback TCP.
 const MCP_SOCKET_ENV = "T3CODE_MCP_SOCKET";
 
 class McpSocketError extends Schema.TaggedError<McpSocketError>()("McpSocketError", {
@@ -57,13 +56,11 @@ const isListening = (path: string) =>
 
 const removeStaleSocket = Effect.fn("McpUnixSocket.removeStaleSocket")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
-  const info = yield* fs.stat(path).pipe(
-    Effect.asSome,
-    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
-  );
-  if (Option.isNone(info)) return;
-  if (info.value.type !== "Socket")
-    return yield* new McpSocketError({ path, reason: "not-a-socket" });
+  const info = yield* fs
+    .stat(path)
+    .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined));
+  if (!info) return;
+  if (info.type !== "Socket") return yield* new McpSocketError({ path, reason: "not-a-socket" });
   if (yield* isListening(path)) return yield* new McpSocketError({ path, reason: "in-use" });
   yield* fs.remove(path);
 });

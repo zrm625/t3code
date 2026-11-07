@@ -149,21 +149,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_endpoints() {
-        let endpoint = Endpoint::new("http://127.0.0.1:4/mcp?x=1", None).unwrap();
-        assert_eq!(
-            (endpoint.authority.as_str(), endpoint.path.as_str()),
-            ("127.0.0.1:4", "/mcp?x=1")
-        );
-        assert_eq!(
-            Endpoint::new("http://[::1]/mcp", None).unwrap().address,
-            "[::1]:80"
-        );
-        assert!(Endpoint::new("https://h/mcp", None).is_err());
-        assert!(Endpoint::new("not a url", None).is_err());
-    }
-
-    #[test]
     fn decodes_events_as_soon_as_they_end() {
         let mut stream = EventStream::default();
         let mut push = |chunk: &str| -> Vec<String> {

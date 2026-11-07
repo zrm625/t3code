@@ -105,11 +105,6 @@ impl Stdin {
         Self(Mutex::new(Some(sender)))
     }
 
-    #[cfg(test)]
-    pub fn detached() -> Self {
-        Self(Mutex::new(None))
-    }
-
     pub fn send(&self, line: Vec<u8>) {
         let sender = self
             .0

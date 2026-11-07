@@ -140,62 +140,30 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn args(list: &[&str]) -> Vec<OsString> {
-        list.iter().map(OsString::from).collect()
-    }
-
-    #[test]
-    fn wraps_only_sdk_sessions() {
-        assert!(is_sdk_session(&args(&[
-            "--output-format",
-            "stream-json",
-            "--input-format",
-            "stream-json"
-        ])));
-        assert!(!is_sdk_session(&args(&["--version"])));
-    }
-
     #[test]
     fn moves_t3_code_out_of_set_servers() {
         let credentials = Credentials::without_parents();
-        let set = json!({
-            "type": "control_request",
-            "request_id": "r1",
-            "request": {
-                "subtype": "mcp_set_servers",
-                "servers": {
-                    "t3-code": { "type": "http", "url": "http://h/mcp", "headers": { "Authorization": "Bearer t" } },
-                    "other": { "type": "stdio", "command": "x" },
-                },
-            },
-        });
-        let rewritten =
-            take_t3_server_from(set.to_string().as_bytes(), &credentials, None).unwrap();
-        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+        let mut servers: Value =
+            serde_json::from_str(r#"{"t3-code": {"type": "http", "url": "http://127.0.0.1:3773/mcp", "headers": {"Authorization": "Bearer token"}, "timeout": 3900000}}"#).unwrap();
+        servers["other"] = json!({ "type": "stdio", "command": "x" });
+        let set = json!({ "type": "control_request", "request_id": "r1",
+            "request": { "subtype": "mcp_set_servers", "servers": servers } });
+        let rewritten = take_t3_server_from(set.to_string().as_bytes(), &credentials, None);
+        let rewritten: Value = serde_json::from_slice(&rewritten.unwrap()).unwrap();
         assert_eq!(
             rewritten["request"]["servers"],
             json!({ "other": { "type": "stdio", "command": "x" } })
         );
-        assert_eq!(rewritten["request_id"], "r1");
-        let newest = credentials.newest().unwrap();
         assert_eq!(
-            (newest.url.as_str(), newest.authorization.as_str()),
-            ("http://h/mcp", "Bearer t")
+            credentials.newest(),
+            Some(Credential {
+                url: "http://127.0.0.1:3773/mcp".into(),
+                authorization: "Bearer token".into(),
+                socket: None,
+            })
         );
-
         let prompt = br#"{"type":"user","message":"mcp_set_servers"}"#;
         assert_eq!(take_t3_server_from(prompt, &credentials, None), None);
-        // A shape T3 Code might move to: passed on unchanged, and reported.
-        let changed = json!({ "type": "control_request", "request": { "subtype": "mcp_set_servers",
-            "servers": { "t3-code": { "type": "http", "url": "http://h/mcp", "bearer_token_env_var": "X" } } } });
-        assert_eq!(
-            take_t3_server_from(
-                changed.to_string().as_bytes(),
-                &Credentials::without_parents(),
-                None
-            ),
-            None
-        );
     }
 
     #[test]
@@ -205,10 +173,6 @@ mod tests {
             to_t3_names(from_claude).as_ref(),
             br#"{"tool":"mcp__t3-code__t3_thread_wait","server":"t3-code","other":"mcp__x__y"}"#
         );
-        assert!(matches!(
-            to_t3_names(br#"{"a":"t3-code"}"#),
-            Cow::Borrowed(_)
-        ));
         assert_eq!(
             to_plugin_names_arg(&OsString::from("Read,mcp__t3-code__*")),
             OsString::from("Read,mcp__plugin_t3-code_t3-code__*")

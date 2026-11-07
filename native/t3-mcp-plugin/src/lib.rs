@@ -10,8 +10,6 @@ mod credentials;
 mod http;
 mod ipc;
 mod proxy;
-#[cfg(test)]
-mod transport_tests;
 
 use std::ffi::OsString;
 

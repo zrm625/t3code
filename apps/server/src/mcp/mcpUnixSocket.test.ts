@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Real Unix sockets, and a child that leaves one behind.
+// @effect-diagnostics nodeBuiltinImport:off - Real Unix sockets, and a child that leaves one behind.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeHttp from "node:http";
 import * as NodeServices from "@effect/platform-node/NodeServices";

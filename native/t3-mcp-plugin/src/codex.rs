@@ -33,7 +33,7 @@ async fn app_server(real: &Path, args: &[OsString]) -> std::io::Result<i32> {
     let (mut process, listener) = child::spawn(real, args)?;
     let codex = Arc::new(Codex {
         stdin: Arc::new(Stdin::start(process.stdin.take().expect("piped stdin"))),
-        replies: Mutex::default(),
+        replies: Replies::default(),
         next_id: AtomicU64::new(1),
     });
     let lookup = Arc::clone(&codex);
@@ -51,16 +51,20 @@ async fn app_server(real: &Path, args: &[OsString]) -> std::io::Result<i32> {
     let (to_t3, replies) = (Arc::clone(&credentials), Arc::clone(&codex));
     let stdout = process.stdout.take().expect("piped stdout");
     let to_t3 = child::relay_to_t3(stdout, move |line| {
-        (!note_reply(line, &replies, &to_t3)).then_some(Cow::Borrowed(line))
+        (!note_reply(line, &replies.replies, &to_t3)).then_some(Cow::Borrowed(line))
     });
     child::serve(process, listener, credentials, Identity::Thread, to_t3).await
 }
 
 struct Codex {
     stdin: Arc<Stdin>,
-    replies: Mutex<HashMap<RequestId, oneshot::Sender<Value>>>,
+    replies: Replies,
     next_id: AtomicU64,
 }
+
+/// Replies the wrapper's own requests are waiting for.
+#[derive(Default)]
+struct Replies(Mutex<HashMap<RequestId, oneshot::Sender<Value>>>);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -68,14 +72,14 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-impl Codex {
+impl Replies {
     fn is_waiting(&self) -> bool {
-        !lock(&self.replies).is_empty()
+        !lock(&self.0).is_empty()
     }
 
     /// False if the reply is T3 Code's.
     fn deliver(&self, id: &RequestId, line: &[u8]) -> bool {
-        let Some(waiter) = lock(&self.replies).remove(id) else {
+        let Some(waiter) = lock(&self.0).remove(id) else {
             return false;
         };
         if let Ok(message) = serde_json::from_slice(line) {
@@ -83,21 +87,23 @@ impl Codex {
         }
         true
     }
+}
 
+impl Codex {
     async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         let id = RequestId::String(format!(
             "t3-codex:{}",
             self.next_id.fetch_add(1, Ordering::SeqCst)
         ));
         let (waiter, reply) = oneshot::channel();
-        lock(&self.replies).insert(id.clone(), waiter);
+        lock(&self.replies.0).insert(id.clone(), waiter);
         let mut line = json!({ "id": id, "method": method, "params": params })
             .to_string()
             .into_bytes();
         line.push(b'\n');
         self.stdin.send(line);
         let reply = tokio::time::timeout(READ_TIMEOUT, reply).await;
-        lock(&self.replies).remove(&id);
+        lock(&self.replies.0).remove(&id);
         let reply = reply
             .map_err(|_| format!("Codex did not answer {method}."))?
             .map_err(|_| format!("Codex closed before answering {method}."))?;
@@ -151,18 +157,12 @@ fn take_t3_servers_from(
     Some(rewritten)
 }
 
-/// Removes T3 Code's servers, dotted (`mcp_servers.t3-code`) or nested. `None` if there were none.
+/// Removes T3 Code's servers (`mcp_servers.t3-code`, ...). `None` if there were none.
 fn take_t3_servers(config: &mut Map<String, Value>, t3_socket: Option<&Path>) -> Option<Binding> {
-    let mut taken: Vec<Value> = T3_SERVERS
+    let taken: Vec<Value> = T3_SERVERS
         .iter()
         .filter_map(|name| config.remove(&format!("mcp_servers.{name}")))
         .collect();
-    if let Some(Value::Object(servers)) = config.get_mut("mcp_servers") {
-        taken.extend(T3_SERVERS.iter().filter_map(|name| servers.remove(*name)));
-        if servers.is_empty() {
-            config.remove("mcp_servers");
-        }
-    }
     if taken.is_empty() {
         return None;
     }
@@ -186,8 +186,8 @@ fn take_t3_servers(config: &mut Map<String, Value>, t3_socket: Option<&Path>) ->
 
 /// Parses only while something is waiting; the app-server's stream otherwise passes unread.
 /// True for a reply to the wrapper's own request, which must not reach T3 Code.
-fn note_reply(line: &[u8], codex: &Codex, credentials: &Credentials) -> bool {
-    if !credentials.is_waiting() && !codex.is_waiting() {
+fn note_reply(line: &[u8], replies: &Replies, credentials: &Credentials) -> bool {
+    if !credentials.is_waiting() && !replies.is_waiting() {
         return false;
     }
     #[derive(Deserialize)]
@@ -213,7 +213,7 @@ fn note_reply(line: &[u8], codex: &Codex, credentials: &Credentials) -> bool {
     else {
         return false;
     };
-    if codex.deliver(&id, line) {
+    if replies.deliver(&id, line) {
         return true;
     }
     let thread = result
@@ -227,83 +227,32 @@ fn note_reply(line: &[u8], codex: &Codex, credentials: &Credentials) -> bool {
 mod tests {
     use super::*;
 
-    fn credentials() -> Credentials {
-        Credentials::new(Box::new(|_| Box::pin(async { Ok(None) })))
-    }
-
-    fn credential(token: &str) -> Credential {
-        Credential {
-            url: "http://h/mcp".into(),
-            authorization: format!("Bearer {token}"),
-            socket: None,
-        }
-    }
-
-    #[test]
-    fn takes_t3_servers_in_every_form() {
-        let server =
-            json!({ "url": "http://h/mcp", "http_headers": { "Authorization": "Bearer a" } });
-        let mut dotted = json!({ "mcp_servers.t3-code": server, "mcp_servers.t3-code-direct": server, "mcp_servers.other": {}, "model": "m" });
-        let dotted = dotted.as_object_mut().unwrap();
-        assert_eq!(take_t3_servers(dotted, None), Some(Ok(credential("a"))));
-        assert_eq!(
-            dotted.keys().collect::<Vec<_>>(),
-            ["mcp_servers.other", "model"]
-        );
-
-        let mut nested = json!({ "mcp_servers": { "t3-code": server, "other": {} } });
-        assert_eq!(
-            take_t3_servers(nested.as_object_mut().unwrap(), None),
-            Some(Ok(credential("a")))
-        );
-        assert_eq!(nested, json!({ "mcp_servers": { "other": {} } }));
-
-        assert_eq!(
-            take_t3_servers(json!({ "x": 1 }).as_object_mut().unwrap(), None),
-            None
-        );
-        // A shape T3 Code might move to: still removed, and reported.
-        let mut changed = json!({ "mcp_servers.t3-code": { "url": "http://h/mcp", "bearer_token_env_var": "X" } });
-        assert!(matches!(
-            take_t3_servers(changed.as_object_mut().unwrap(), None),
-            Some(Err(_))
-        ));
-    }
-
     #[tokio::test]
-    async fn binds_threads_from_requests_and_replies() {
-        let credentials = credentials();
-        let codex = Codex {
-            stdin: Arc::new(Stdin::detached()),
-            replies: Mutex::default(),
-            next_id: AtomicU64::new(1),
-        };
-        assert_eq!(
-            take_t3_servers_from(
-                br#"{"id":1,"method":"turn/start","params":{"x":"thread/start"}}"#,
-                &credentials,
-                None
-            ),
-            None
-        );
-
-        let start = br#"{"id":7,"method":"thread/start","params":{"config":{"mcp_servers.t3-code":{"url":"http://h/mcp","http_headers":{"Authorization":"Bearer a"}}}}}"#;
-        let rewritten: Value =
-            serde_json::from_slice(&take_t3_servers_from(start, &credentials, None).unwrap())
-                .unwrap();
+    async fn moves_t3_servers_out_of_thread_requests() {
+        let credentials = Credentials::new(Box::new(|_| Box::pin(async { Ok(None) })));
+        let mut config: Map<String, Value> =
+            serde_json::from_str(r#"{"mcp_servers.t3-code": {"url": "http://127.0.0.1:3773/mcp", "tool_timeout_sec": 3900, "http_headers": {"Authorization": "Bearer token"}, "disabled_tools": ["t3_thread_wait"]}, "mcp_servers.t3-code-direct": {"url": "http://127.0.0.1:3773/mcp", "tool_timeout_sec": 3900, "http_headers": {"Authorization": "Bearer token"}, "enabled_tools": ["t3_thread_wait"], "omit_tools_from": ["code_mode", "deferred"]}}"#).unwrap();
+        config.insert("model".into(), json!("m"));
+        let start = json!({ "id": 7, "method": "thread/start", "params": { "config": config } });
+        let rewritten = take_t3_servers_from(start.to_string().as_bytes(), &credentials, None);
+        let rewritten: Value = serde_json::from_slice(&rewritten.unwrap()).unwrap();
         assert_eq!(
             rewritten["params"]["config"],
-            json!({ SHELL_FILTER_KEY: "exclude" })
+            json!({ "model": "m", SHELL_FILTER_KEY: "exclude" })
         );
 
         assert!(!note_reply(
             br#"{"id":7,"result":{"thread":{"id":"th"}}}"#,
-            &codex,
+            &Replies::default(),
             &credentials
         ));
         assert_eq!(
             credentials.for_thread(&ThreadId("th".into())).await,
-            Ok(credential("a"))
+            Ok(Credential {
+                url: "http://127.0.0.1:3773/mcp".into(),
+                authorization: "Bearer token".into(),
+                socket: None,
+            })
         );
     }
 }

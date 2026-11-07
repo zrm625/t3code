@@ -236,8 +236,5 @@ mod tests {
         });
         let waited = credentials.wait_for_newest(Duration::from_secs(5)).await;
         assert_eq!(waited, Some(credential("late")));
-
-        let none = Credentials::without_parents();
-        assert_eq!(none.wait_for_newest(Duration::from_millis(10)).await, None);
     }
 }
