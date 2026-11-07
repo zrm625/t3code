@@ -21,7 +21,7 @@ import {
 /** Opt-in path where `/mcp` is also served, for hosts that forbid MCP over loopback TCP. */
 const MCP_SOCKET_ENV = "T3CODE_MCP_SOCKET";
 
-export class McpSocketError extends Schema.TaggedError<McpSocketError>()("McpSocketError", {
+class McpSocketError extends Schema.TaggedError<McpSocketError>()("McpSocketError", {
   path: Schema.String,
   reason: Schema.Literals(["not-a-socket", "in-use"]),
 }) {
@@ -68,43 +68,20 @@ const removeStaleSocket = Effect.fn("McpUnixSocket.removeStaleSocket")(function*
   yield* fs.remove(path);
 });
 
-/**
- * Serves `main`'s app on a Unix socket too, restricted to `/mcp`. The socket is chmodded to 0600
- * just after it is created, so put it in an owner-only directory. Node removes it on close.
- */
-const serveMcpAlongside = Effect.fn("McpUnixSocket.serveMcpAlongside")(function* (
-  main: HttpServer.HttpServer["Service"],
-  path: string,
-  gracefulShutdownTimeout: NodeHttpServer.Options["gracefulShutdownTimeout"],
-) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* removeStaleSocket(path);
-  const socket = yield* NodeHttpServer.make(
-    () => rejectRequestsUntilServing(guardHttpResponseWriteErrors(NodeHttp.createServer())),
-    { gracefulShutdownTimeout, path },
-  );
-  yield* fs.chmod(path, 0o600);
-  yield* Effect.logInfo("Serving /mcp on a Unix socket", { path });
-  const serve = <E, R>(
-    app: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
-    middleware?: HttpMiddleware.HttpMiddleware,
-  ) => {
-    const on = <E2, R2>(
-      server: HttpServer.HttpServer["Service"],
-      handler: Effect.Effect<HttpServerResponse.HttpServerResponse, E2, R2>,
-    ): Effect.Effect<
-      void,
-      never,
-      Exclude<R2, HttpServerRequest.HttpServerRequest> | Scope.Scope
-    > =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off - HttpServer.make erases middleware types
-      middleware ? server.serve(handler, middleware) : server.serve(handler);
-    return Effect.andThen(on(main, app), on(socket, onlyMcp(app)));
-  };
-  return HttpServer.make({ address: main.address, serve });
-});
+// For a caller that may or may not pass middleware, as `HttpServer.make` allows.
+const serveWith = <E, R>(
+  server: HttpServer.HttpServer["Service"],
+  app: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+  middleware: HttpMiddleware.HttpMiddleware | undefined,
+): Effect.Effect<void, never, Exclude<R, HttpServerRequest.HttpServerRequest> | Scope.Scope> =>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off - HttpMiddleware's types are `any`
+  middleware ? server.serve(app, middleware) : server.serve(app);
 
-/** `NodeHttpServer.layer`, plus `/mcp` on the socket `T3CODE_MCP_SOCKET` names, when set. */
+/**
+ * `NodeHttpServer.layer`, plus the same app on the Unix socket `T3CODE_MCP_SOCKET` names,
+ * restricted to `/mcp`. The socket is chmodded to 0600 just after it is created, so put it in an
+ * owner-only directory. Node removes it on close.
+ */
 export const layerNodeHttpServer = (
   evaluate: LazyArg<NodeHttp.Server>,
   options: NodeHttpServer.Options,
@@ -115,9 +92,26 @@ export const layerNodeHttpServer = (
       Effect.gen(function* () {
         const main = yield* NodeHttpServer.make(evaluate, options);
         const path = yield* Config.option(Config.String(MCP_SOCKET_ENV));
-        return Option.isSome(path)
-          ? yield* serveMcpAlongside(main, path.value, options.gracefulShutdownTimeout)
-          : main;
+        if (Option.isNone(path)) return main;
+        const fs = yield* FileSystem.FileSystem;
+        yield* removeStaleSocket(path.value);
+        const socket = yield* NodeHttpServer.make(
+          () => rejectRequestsUntilServing(guardHttpResponseWriteErrors(NodeHttp.createServer())),
+          { gracefulShutdownTimeout: options.gracefulShutdownTimeout, path: path.value },
+        );
+        yield* fs.chmod(path.value, 0o600);
+        yield* Effect.logInfo("Serving /mcp on a Unix socket", { path: path.value });
+        return HttpServer.make({
+          address: main.address,
+          serve: <E, R>(
+            app: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+            middleware?: HttpMiddleware.HttpMiddleware,
+          ) =>
+            Effect.andThen(
+              serveWith(main, app, middleware),
+              serveWith(socket, onlyMcp(app), middleware),
+            ),
+        });
       }),
     ),
     NodeHttpServer.layerHttpServices,
