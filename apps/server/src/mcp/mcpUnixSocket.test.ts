@@ -1,88 +1,90 @@
-// Exercise the raw Node socket listener that feeds the main server.
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off -- Real Unix sockets, and a child that leaves one behind.
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-import { describe, expect, it } from "vite-plus/test";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 
-import { closeMcpSocket, listenMcpSocket } from "./mcpUnixSocket.ts";
+import { layerNodeHttpServer } from "./mcpUnixSocket.ts";
 
-const request = (socketPath: string, path: string): Promise<{ status: number; body: string }> =>
-  new Promise((resolve, reject) => {
-    const sent = NodeHttp.request(
-      { socketPath, path, method: "POST", agent: false },
-      (response) => {
-        let body = "";
-        response.on("data", (chunk) => (body += chunk));
-        response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
-      },
-    );
-    sent.on("error", reject);
-    sent.end("{}");
-  });
+const request = (socketPath: string, path: string) =>
+  Effect.promise(
+    () =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const sent = NodeHttp.request(
+          { socketPath, path, method: "POST", agent: false },
+          (response) => {
+            let body = "";
+            response.on("data", (chunk) => (body += chunk));
+            response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
+          },
+        );
+        sent.on("error", reject);
+        sent.end("{}");
+      }),
+  );
 
-const withDir = async (run: (dir: string) => Promise<void>) => {
-  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-socket-"));
-  try {
-    await run(dir);
-  } finally {
-    NodeFS.rmSync(dir, { recursive: true, force: true });
-  }
-};
-
-describe("listenMcpSocket", () => {
-  it("serves only /mcp from the main server, owner-only, and removes the socket on close", () =>
-    withDir(async (dir) => {
-      const path = NodePath.join(dir, "mcp.sock");
-      const main = NodeHttp.createServer((req, res) => res.end(`main saw ${req.url}`));
-      const socket = await listenMcpSocket(path, () => main);
-      try {
-        expect(NodeFS.statSync(path).mode & 0o777).toBe(0o600);
-        expect(await request(path, "/mcp")).toEqual({ status: 200, body: "main saw /mcp" });
-        expect(await request(path, "/mcp?x=1")).toEqual({ status: 200, body: "main saw /mcp?x=1" });
-        expect((await request(path, "/api/settings")).status).toBe(404);
-        expect((await request(path, "/mcpx")).status).toBe(404);
-      } finally {
-        await closeMcpSocket(socket);
-      }
-      expect(NodeFS.existsSync(path)).toBe(false);
-    }));
-
-  it("answers 503 until the main server exists", () =>
-    withDir(async (dir) => {
-      const path = NodePath.join(dir, "mcp.sock");
-      const socket = await listenMcpSocket(path, () => undefined);
-      try {
-        expect((await request(path, "/mcp")).status).toBe(503);
-      } finally {
-        await closeMcpSocket(socket);
-      }
-    }));
-
-  it("replaces a stale socket, but never a live one or another file", () =>
-    withDir(async (dir) => {
-      const path = NodePath.join(dir, "mcp.sock");
-      const main = NodeHttp.createServer((_req, res) => res.end("ok"));
-      // A server killed before cleanup leaves its socket file behind.
-      NodeChildProcess.spawnSync(process.execPath, [
-        "-e",
-        `require("node:net").createServer().listen(${JSON.stringify(path)}, () => process.kill(process.pid, "SIGKILL"))`,
-      ]);
-      expect(NodeFS.lstatSync(path).isSocket()).toBe(true);
-      const socket = await listenMcpSocket(path, () => main);
-      expect(await request(path, "/mcp")).toEqual({ status: 200, body: "ok" });
-      // A second server given the same path must not take it from the first.
-      await expect(listenMcpSocket(path, () => main)).rejects.toThrow(
-        "another server is listening",
-      );
-      expect(await request(path, "/mcp")).toEqual({ status: 200, body: "ok" });
-      await closeMcpSocket(socket);
-
-      const file = NodePath.join(dir, "not-a-socket");
-      NodeFS.writeFileSync(file, "data");
-      await expect(listenMcpSocket(file, () => main)).rejects.toThrow("is not a socket");
-      expect(NodeFS.readFileSync(file, "utf8")).toBe("data");
-    }));
+// Through the real layer with real listen options, as server.ts builds it.
+const serve = Effect.fn("mcpUnixSocket.test.serve")(function* (path: string) {
+  const context = yield* Layer.build(
+    layerNodeHttpServer(() => NodeHttp.createServer(), { host: "127.0.0.1", port: 0 }).pipe(
+      Layer.provide(
+        ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_MCP_SOCKET: path } })),
+      ),
+    ),
+  );
+  yield* Context.get(context, HttpServer.HttpServer).serve(
+    Effect.map(HttpServerRequest.HttpServerRequest, (req) =>
+      HttpServerResponse.text(`app saw ${req.url}`),
+    ),
+  );
 });
+
+it.live("serves only /mcp from the main app, owner-only, and removes the socket on close", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = `${yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-socket-" })}/mcp.sock`;
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* serve(path);
+        expect(((yield* fs.stat(path)).mode & 0o777).toString(8)).toBe("600");
+        expect(yield* request(path, "/mcp")).toEqual({ status: 200, body: "app saw /mcp" });
+        expect(yield* request(path, "/mcp?x=1")).toEqual({ status: 200, body: "app saw /mcp?x=1" });
+        expect((yield* request(path, "/api/settings")).status).toBe(404);
+        expect((yield* request(path, "/mcpx")).status).toBe(404);
+      }),
+    );
+    expect(yield* fs.exists(path)).toBe(false);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("replaces a stale socket, but never a live one or another file", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-socket-" });
+    const path = `${dir}/mcp.sock`;
+    // A server killed before cleanup leaves its socket file behind.
+    NodeChildProcess.spawnSync(process.execPath, [
+      "-e",
+      `require("node:net").createServer().listen(${JSON.stringify(path)}, () => process.kill(process.pid, "SIGKILL"))`,
+    ]);
+    expect((yield* fs.stat(path)).type).toBe("Socket");
+    yield* serve(path);
+    expect((yield* request(path, "/mcp")).status).toBe(200);
+
+    expect(yield* Effect.flip(Effect.scoped(serve(path)))).toMatchObject({ reason: "in-use" });
+    expect((yield* request(path, "/mcp")).status).toBe(200);
+
+    const file = `${dir}/not-a-socket`;
+    yield* fs.writeFileString(file, "data");
+    expect(yield* Effect.flip(Effect.scoped(serve(file)))).toMatchObject({
+      reason: "not-a-socket",
+    });
+    expect(yield* fs.readFileString(file)).toBe("data");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

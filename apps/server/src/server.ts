@@ -12,7 +12,6 @@ import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQ
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
@@ -20,7 +19,6 @@ import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Config from "effect/Config";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -351,23 +349,11 @@ const layerHttpServer = Layer.unwrap(
       privateNetworkOnly: config.privateNetworkOnly,
     });
     yield* ManagedLimits.closeTailscaleServeTo(policy, { host: bindHost, port: config.port });
-    const mainServer: { current?: NodeHttp.Server } = {};
-    const mcpSocketPath = yield* Config.option(Config.String(McpUnixSocket.MCP_SOCKET_ENV));
-    if (Option.isSome(mcpSocketPath)) {
-      const path = mcpSocketPath.value;
-      yield* Effect.acquireRelease(
-        // Opt-in: a socket that cannot be served stops startup instead of failing quietly.
-        Effect.promise(() => McpUnixSocket.listenMcpSocket(path, () => mainServer.current)),
-        (socket) => Effect.promise(() => McpUnixSocket.closeMcpSocket(socket)),
-      );
-      yield* Effect.logInfo("Serving /mcp on a Unix socket", { path });
-    }
-    return NodeHttpServer.layer(
+    return McpUnixSocket.layerNodeHttpServer(
       () => {
         const server = rejectRequestsUntilServing(
           guardHttpResponseWriteErrors(NodeHttp.createServer()),
         );
-        mainServer.current = server;
         if (config.privateNetworkOnly) {
           server.on("connection", (socket) => {
             if (!acceptsPrivateNetworkConnection(socket)) {
