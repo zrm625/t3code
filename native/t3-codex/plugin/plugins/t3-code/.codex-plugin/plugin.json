@@ -1,0 +1,13 @@
+{
+  "name": "t3-code",
+  "version": "0.1.0",
+  "description": "Connects Codex threads started by T3 Code to T3 Code's tools.",
+  "keywords": ["t3-code", "orchestration"],
+  "interface": {
+    "displayName": "T3 Code",
+    "shortDescription": "T3 Code's tools for threads T3 Code starts",
+    "developerName": "T3 Tools",
+    "category": "Developer Tools",
+    "websiteUrl": "https://t3.codes"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "t3-code": {
+      "command": "t3-codex",
+      "args": ["mcp-bridge"],
+      "env_vars": ["T3_MCP_SOCKET"],
+      "tool_timeout_sec": 3900,
+      "disabled_tools": ["t3_thread_wait"]
+    },
+    "t3-code-direct": {
+      "command": "t3-codex",
+      "args": ["mcp-bridge"],
+      "env_vars": ["T3_MCP_SOCKET"],
+      "tool_timeout_sec": 3900,
+      "enabled_tools": ["t3_thread_wait"],
+      "omit_tools_from": ["code_mode", "deferred"]
+    }
+  }
+}

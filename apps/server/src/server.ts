@@ -20,6 +20,7 @@ import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Config from "effect/Config";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -78,6 +79,7 @@ import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceR
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as McpUnixSocket from "./mcp/mcpUnixSocket.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
@@ -349,11 +351,23 @@ const layerHttpServer = Layer.unwrap(
       privateNetworkOnly: config.privateNetworkOnly,
     });
     yield* ManagedLimits.closeTailscaleServeTo(policy, { host: bindHost, port: config.port });
+    const mainServer: { current?: NodeHttp.Server } = {};
+    const mcpSocketPath = yield* Config.option(Config.String(McpUnixSocket.MCP_SOCKET_ENV));
+    if (Option.isSome(mcpSocketPath)) {
+      const path = mcpSocketPath.value;
+      yield* Effect.acquireRelease(
+        // Opt-in: a socket that cannot be served stops startup instead of failing quietly.
+        Effect.promise(() => McpUnixSocket.listenMcpSocket(path, () => mainServer.current)),
+        (socket) => Effect.promise(() => McpUnixSocket.closeMcpSocket(socket)),
+      );
+      yield* Effect.logInfo("Serving /mcp on a Unix socket", { path });
+    }
     return NodeHttpServer.layer(
       () => {
         const server = rejectRequestsUntilServing(
           guardHttpResponseWriteErrors(NodeHttp.createServer()),
         );
+        mainServer.current = server;
         if (config.privateNetworkOnly) {
           server.on("connection", (socket) => {
             if (!acceptsPrivateNetworkConnection(socket)) {
