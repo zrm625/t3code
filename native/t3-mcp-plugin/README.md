@@ -45,12 +45,22 @@ refuses servers added that way, so the wrapper moves them into the plugin:
 T3 Code sees exactly the per-thread credentials it issues today, so scopes, capabilities, idle
 expiry, rotation, and revocation work unchanged.
 
-Codex registers the server twice: `t3-code-direct` carries only `t3_thread_wait`, so Codex calls
-that blocking tool directly instead of from Code Mode, as T3 Code does today.
-
 Claude Code names plugin tools `mcp__plugin_t3-code_t3-code__<tool>`, while T3 Code expects
 `mcp__t3-code__<tool>` in its allowed tools, approvals, and tool rows. `t3-claude` maps the names
 in both directions: in Claude's arguments and input, and in its output.
+
+## Plugin server settings
+
+The MCP files are plain JSON: Codex silently loads no servers from a file with comments. Their
+settings copy what T3 Code sends each thread today, in `codexThreadRuntimeParams` and
+`claudeMcpQueryOverrides`. Keep them in step when those change.
+
+| Setting                                                                | Why                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`, `args`                                                      | The bridge. Each policy allows the server only when these match exactly.                                                                                                                                                                              |
+| `env_vars: ["T3_MCP_SOCKET"]` (Codex)                                  | Codex starts MCP servers with a reduced environment. Without this the bridge cannot find the wrapper and serves no tools.                                                                                                                             |
+| `tool_timeout_sec: 3900` (Codex), `timeout: 3900000` (Claude Code, ms) | 65 minutes. `t3_thread_wait` can block for an hour.                                                                                                                                                                                                   |
+| `t3-code` and `t3-code-direct` (Codex)                                 | The same bridge registered twice. Code Mode would run the blocking `t3_thread_wait` as a nested call while the model keeps working, so `t3-code` disables it and `t3-code-direct` carries only that tool, hidden from Code Mode and deferred loading. |
 
 ## Setup on a managed machine
 
