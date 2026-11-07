@@ -1,9 +1,17 @@
 [package]
-name = "t3-codex"
+name = "t3-mcp-plugin"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
+
+[[bin]]
+name = "t3-codex"
+path = "src/bin/t3-codex.rs"
+
+[[bin]]
+name = "t3-claude"
+path = "src/bin/t3-claude.rs"
 
 [dependencies]
 bytes = "1.12.1"

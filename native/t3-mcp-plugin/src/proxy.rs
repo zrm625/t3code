@@ -18,10 +18,21 @@ use tokio::task::JoinSet;
 /// Opening a session is quick. Tool calls get no limit: `t3_thread_wait` can take an hour.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const END_SESSION_TIMEOUT: Duration = Duration::from_secs(2);
-const INITIALIZE_ID: &str = "t3-codex:initialize";
+/// Covers T3 Code sending Claude its credential just after the plugin servers start.
+const CREDENTIAL_WAIT: Duration = Duration::from_secs(15);
+const INITIALIZE_ID: &str = "t3-mcp-plugin:initialize";
 const NO_REPLY: &str = "T3 Code MCP endpoint ended the request without a reply.";
 const NO_THREAD: &str = "Codex sent a tool call without _meta.threadId, so t3-codex cannot tell which \
                          T3 Code thread is calling. This Codex version is not supported.";
+
+/// Which T3 Code thread a tool call acts as.
+#[derive(Clone, Copy, Debug)]
+pub enum Identity {
+    /// Codex: one app-server hosts many threads, and `_meta.threadId` names the caller.
+    Thread,
+    /// Claude: one process per thread; subagents share it, so every call is that thread's.
+    Process,
+}
 
 #[derive(Debug)]
 enum Error {
@@ -66,6 +77,7 @@ struct Session {
 
 struct Connection {
     credentials: Arc<Credentials>,
+    identity: Identity,
     output: mpsc::UnboundedSender<String>,
     sessions: Mutex<HashMap<Credential, Arc<OnceCell<Arc<Session>>>>>,
     /// Serves everything not tied to a thread: discovery, pings, notifications.
@@ -80,7 +92,7 @@ struct Connection {
     in_flight: Mutex<HashMap<RequestId, Arc<Session>>>,
 }
 
-pub async fn serve(stream: impl Stream, credentials: Arc<Credentials>) {
+pub async fn serve(stream: impl Stream, credentials: Arc<Credentials>, identity: Identity) {
     let (reader, mut writer) = tokio::io::split(stream);
     let (output, mut outgoing) = mpsc::unbounded_channel::<String>();
     tokio::spawn(async move {
@@ -94,6 +106,7 @@ pub async fn serve(stream: impl Stream, credentials: Arc<Credentials>) {
     });
     let connection = Arc::new(Connection {
         credentials,
+        identity,
         output,
         sessions: Mutex::default(),
         primary: Mutex::default(),
@@ -202,9 +215,9 @@ impl Connection {
         id: Option<&RequestId>,
         params: &Value,
     ) -> Result<(), Error> {
-        let thread = match method {
+        let thread = match (method, self.identity) {
             // Without it, the call would run as whichever thread a session was opened for.
-            "tools/call" => Some(
+            ("tools/call", Identity::Thread) => Some(
                 params
                     .pointer("/_meta/threadId")
                     .and_then(Value::as_str)
@@ -215,12 +228,17 @@ impl Connection {
             _ => None,
         };
         for attempt in 0..2 {
-            let session = match &thread {
-                Some(thread) => {
+            let session = match (&thread, method) {
+                (Some(thread), _) => {
                     self.session(self.credentials.for_thread(thread).await?)
                         .await?
                 }
-                None => match self.cancelled_request_session(method, params) {
+                // A rotated credential takes effect on the next call.
+                (None, "tools/call") => {
+                    let credential = self.credentials.newest().ok_or(Error::Offline)?;
+                    self.session(credential).await?
+                }
+                _ => match self.cancelled_request_session(method, params) {
                     Some(session) => session,
                     None => self.primary().await?,
                 },
@@ -266,7 +284,11 @@ impl Connection {
             return Ok(session);
         }
         for attempt in 0..2 {
-            let credential = self.credentials.bootstrap().ok_or(Error::Offline)?;
+            let credential = match self.identity {
+                Identity::Thread => self.credentials.newest(),
+                Identity::Process => self.credentials.wait_for_newest(CREDENTIAL_WAIT).await,
+            };
+            let credential = credential.ok_or(Error::Offline)?;
             match self.session(credential).await {
                 Ok(session) => {
                     *lock(&self.primary) = Some(Arc::clone(&session));

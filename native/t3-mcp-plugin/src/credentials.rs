@@ -4,6 +4,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Mutex;
+use std::time::Duration;
+use tokio::sync::watch;
 
 /// Subagents rarely nest; this only stops a cycle from looping forever.
 const MAX_PARENT_DEPTH: usize = 8;
@@ -50,6 +52,8 @@ struct State {
 pub struct Credentials {
     state: Mutex<State>,
     parent_of: ParentLookup,
+    /// Bumped whenever a credential arrives, for callers waiting on the first one.
+    arrived: watch::Sender<u64>,
 }
 
 impl Credentials {
@@ -57,7 +61,13 @@ impl Credentials {
         Self {
             state: Mutex::default(),
             parent_of,
+            arrived: watch::Sender::new(0),
         }
+    }
+
+    /// For a CLI whose subagents share its process, so no thread lineage is needed.
+    pub fn without_parents() -> Self {
+        Self::new(Box::new(|_| Box::pin(async { Ok(None) })))
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -69,12 +79,19 @@ impl Credentials {
     /// Called before the thread request reaches Codex, so a bridge Codex starts for it finds a
     /// credential.
     pub fn begin(&self, request: RequestId, binding: Binding) {
-        let mut state = self.state();
         if let Ok(credential) = &binding {
-            state.recent.retain(|known| known != credential);
-            state.recent.push(credential.clone());
+            self.set_newest(credential.clone());
         }
-        state.pending.insert(request, binding);
+        self.state().pending.insert(request, binding);
+    }
+
+    /// A CLI process acts as one thread; T3 Code replaces its credential when it rotates it.
+    pub fn set_newest(&self, credential: Credential) {
+        let mut state = self.state();
+        state.recent.retain(|known| known != &credential);
+        state.recent.push(credential);
+        drop(state);
+        self.arrived.send_modify(|count| *count += 1);
     }
 
     /// Records Codex's reply to a thread request. `None` means the request failed; T3 Code may
@@ -100,10 +117,26 @@ impl Credentials {
         !self.state().pending.is_empty()
     }
 
-    /// For initialize and discovery, before any thread is known. `None`: T3 Code did not start
-    /// this session.
-    pub fn bootstrap(&self) -> Option<Credential> {
+    /// Codex: for initialize and discovery, before any thread is known. Claude: the process's own.
+    /// `None`: T3 Code gave none, so it did not start this session.
+    pub fn newest(&self) -> Option<Credential> {
         self.state().recent.last().cloned()
+    }
+
+    /// Claude starts plugin servers before T3 Code sends the credential, so they wait for it.
+    pub async fn wait_for_newest(&self, timeout: Duration) -> Option<Credential> {
+        let mut arrived = self.arrived.subscribe();
+        let wait = async {
+            loop {
+                if let Some(credential) = self.newest() {
+                    return credential;
+                }
+                if arrived.changed().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        };
+        tokio::time::timeout(timeout, wait).await.ok()
     }
 
     /// The credential a Codex thread acts with. A subagent T3 Code never saw acts as the T3 Code
@@ -186,10 +219,25 @@ mod tests {
         let credentials = lineage();
         credentials.begin(RequestId::Number(1), Ok(credential("a")));
         credentials.begin(RequestId::String("x".into()), Ok(credential("b")));
-        assert_eq!(credentials.bootstrap(), Some(credential("b")));
+        assert_eq!(credentials.newest(), Some(credential("b")));
         credentials.finish(&RequestId::Number(1), Some(thread("a")));
         credentials.finish(&RequestId::String("x".into()), None);
-        assert_eq!(credentials.bootstrap(), Some(credential("a")));
+        assert_eq!(credentials.newest(), Some(credential("a")));
         assert!(!credentials.is_waiting());
+    }
+
+    #[tokio::test]
+    async fn waits_for_a_credential_that_arrives_late() {
+        let credentials = std::sync::Arc::new(Credentials::without_parents());
+        let late = std::sync::Arc::clone(&credentials);
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            late.set_newest(credential("late"));
+        });
+        let waited = credentials.wait_for_newest(Duration::from_secs(5)).await;
+        assert_eq!(waited, Some(credential("late")));
+
+        let none = Credentials::without_parents();
+        assert_eq!(none.wait_for_newest(Duration::from_millis(10)).await, None);
     }
 }

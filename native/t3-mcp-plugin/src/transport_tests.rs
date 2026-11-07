@@ -1,5 +1,5 @@
 use crate::credentials::{Credential, Credentials, RequestId};
-use crate::proxy::serve;
+use crate::proxy::{Identity, serve};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -76,7 +76,7 @@ async fn relays_a_server_request_during_the_handshake() {
     };
     credentials.begin(RequestId::Number(0), Ok(credential));
     let (codex, bridge) = tokio::io::duplex(64 * 1024);
-    tokio::spawn(serve(bridge, credentials));
+    tokio::spawn(serve(bridge, credentials, Identity::Thread));
     let (reader, mut writer) = tokio::io::split(codex);
     let mut lines = BufReader::new(reader).lines();
     writer
