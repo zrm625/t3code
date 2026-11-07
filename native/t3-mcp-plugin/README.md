@@ -53,7 +53,7 @@ in both directions: in Claude's arguments and input, and in its output.
 
 The MCP files are plain JSON: Codex silently loads no servers from a file with comments. Their
 settings copy what T3 Code sends each thread today, in `codexThreadRuntimeParams` and
-`claudeMcpQueryOverrides`. Keep them in step when those change.
+`claudeMcpQueryOverrides`. `apps/server/src/mcp/mcpPlugin.test.ts` fails when they drift apart.
 
 | Setting                                                                | Why                                                                                                                                                                                                                                                   |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -126,8 +126,10 @@ mcp-bridge`, and the variable `T3_MCP_SOCKET`.
 
 The wrappers also depend on how T3 Code hands over its server: `codexThreadRuntimeParams` and
 `claudeMcpQueryOverrides` in the provider adapters (a server named `t3-code` with `url` and an
-`Authorization` header). If T3 Code changes those fields, the wrapper logs that it does not
-understand them; tool calls then fail instead of running as another thread.
+`Authorization` header). `apps/server/src/mcp/mcpPlugin.test.ts` checks T3 Code's output against
+`fixtures/`, which the Rust tests parse, so a change there fails CI. A wrapper older than the
+T3 Code it runs under logs that it does not understand the fields; tool calls then fail instead
+of running as another thread.
 
 ## Requirements
 

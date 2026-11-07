@@ -231,7 +231,7 @@ mod tests {
     async fn moves_t3_servers_out_of_thread_requests() {
         let credentials = Credentials::new(Box::new(|_| Box::pin(async { Ok(None) })));
         let mut config: Map<String, Value> =
-            serde_json::from_str(r#"{"mcp_servers.t3-code": {"url": "http://127.0.0.1:3773/mcp", "tool_timeout_sec": 3900, "http_headers": {"Authorization": "Bearer token"}, "disabled_tools": ["t3_thread_wait"]}, "mcp_servers.t3-code-direct": {"url": "http://127.0.0.1:3773/mcp", "tool_timeout_sec": 3900, "http_headers": {"Authorization": "Bearer token"}, "enabled_tools": ["t3_thread_wait"], "omit_tools_from": ["code_mode", "deferred"]}}"#).unwrap();
+            serde_json::from_str(include_str!("../fixtures/codex-mcp-servers.json")).unwrap();
         config.insert("model".into(), json!("m"));
         let start = json!({ "id": 7, "method": "thread/start", "params": { "config": config } });
         let rewritten = take_t3_servers_from(start.to_string().as_bytes(), &credentials, None);

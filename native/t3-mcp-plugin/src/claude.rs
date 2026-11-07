@@ -144,7 +144,7 @@ mod tests {
     fn moves_t3_code_out_of_set_servers() {
         let credentials = Credentials::without_parents();
         let mut servers: Value =
-            serde_json::from_str(r#"{"t3-code": {"type": "http", "url": "http://127.0.0.1:3773/mcp", "headers": {"Authorization": "Bearer token"}, "timeout": 3900000}}"#).unwrap();
+            serde_json::from_str(include_str!("../fixtures/claude-mcp-servers.json")).unwrap();
         servers["other"] = json!({ "type": "stdio", "command": "x" });
         let set = json!({ "type": "control_request", "request_id": "r1",
             "request": { "subtype": "mcp_set_servers", "servers": servers } });
