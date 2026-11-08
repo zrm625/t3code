@@ -21,7 +21,7 @@ pub fn run(args: Vec<OsString>) -> crate::Result<i32> {
     if !is_sdk_session(&args) {
         return child::passthrough(&real, &args);
     }
-    Ok(child::runtime()?.block_on(session(&real, &args))?)
+    Ok(crate::runtime()?.block_on(session(&real, &args))?)
 }
 
 /// The Agent SDK runs Claude with stream-json input; anything else (`--version`) is not a session.

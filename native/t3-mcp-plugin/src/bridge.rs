@@ -16,10 +16,7 @@ pub fn run() -> crate::Result<i32> {
         offline();
         return Ok(0);
     };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(pipe(&name))?;
+    crate::runtime()?.block_on(pipe(&name))?;
     Ok(0)
 }
 

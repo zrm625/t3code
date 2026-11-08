@@ -2,6 +2,7 @@
 
 use crate::credentials::Credentials;
 use crate::ipc;
+use crate::lock;
 use crate::proxy::{self, Identity};
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -15,7 +16,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// T3 Code's opt-in Unix socket (or pipe) for `/mcp`; when set, sessions use it instead of TCP.
-const T3_MCP_SOCKET_ENV: &str = "T3CODE_MCP_SOCKET";
+const T3CODE_MCP_SOCKET_ENV: &str = "T3CODE_MCP_SOCKET";
 
 /// `real_env`, else the first `name` on PATH that is not this program.
 pub fn real_binary(name: &str, real_env: &str) -> crate::Result<PathBuf> {
@@ -42,7 +43,7 @@ pub fn real_binary(name: &str, real_env: &str) -> crate::Result<PathBuf> {
 }
 
 pub fn t3_socket() -> Option<PathBuf> {
-    std::env::var_os(T3_MCP_SOCKET_ENV)
+    std::env::var_os(T3CODE_MCP_SOCKET_ENV)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
 }
@@ -59,12 +60,6 @@ pub fn passthrough(real: &Path, args: &[OsString]) -> crate::Result<i32> {
     let status = std::process::Command::new(real).args(args).status();
     let status = status.map_err(|error| format!("cannot run {}: {error}", real.display()))?;
     Ok(exit_code(status))
-}
-
-pub fn runtime() -> io::Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
 }
 
 /// Starts the real CLI with the bridges' endpoint in its environment. The plugin runs
@@ -106,21 +101,14 @@ impl Stdin {
     }
 
     pub fn send(&self, line: Vec<u8>) {
-        let sender = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(sender) = sender.as_ref() {
+        if let Some(sender) = lock(&self.0).as_ref() {
             let _ = sender.send(line);
         }
     }
 
     /// Closing T3 Code's side closes the CLI's stdin, which shuts it down.
     pub fn close(&self) {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
+        lock(&self.0).take();
     }
 }
 

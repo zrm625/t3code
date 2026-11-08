@@ -71,9 +71,7 @@ impl Credentials {
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::lock(&self.state)
     }
 
     /// Called before the thread request reaches Codex, so a bridge Codex starts for it finds a

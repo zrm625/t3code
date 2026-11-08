@@ -18,7 +18,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub fn new(url: &str, socket: Option<PathBuf>) -> Result<Self, String> {
-        let invalid = || format!("T3 Code gave an MCP URL t3-codex cannot use: {url}");
+        let invalid = || format!("T3 Code gave an MCP URL the plugin cannot use: {url}");
         let uri: Uri = url.parse().map_err(|_| invalid())?;
         let authority = uri
             .authority()

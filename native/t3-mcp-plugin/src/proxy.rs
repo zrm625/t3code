@@ -2,6 +2,7 @@ use crate::bridge::offline_reply;
 use crate::credentials::{Credential, Credentials, RequestId, ThreadId};
 use crate::http::{self, Endpoint, EventStream};
 use crate::ipc::Stream;
+use crate::lock;
 use hyper::Method;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
@@ -9,7 +10,7 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{OnceCell, mpsc, watch};
@@ -58,12 +59,6 @@ impl From<String> for Error {
     fn from(message: String) -> Self {
         Self::Failed(message)
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 struct Session {

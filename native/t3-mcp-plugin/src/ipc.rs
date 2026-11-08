@@ -5,7 +5,7 @@ use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Names the wrapper's endpoint for the bridges Codex starts. Plugin `env_vars` pass it through.
-pub const ENV: &str = "T3_MCP_SOCKET";
+pub const ENV: &str = "T3_MCP_BRIDGE";
 
 pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Stream for T {}

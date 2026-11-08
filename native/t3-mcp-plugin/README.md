@@ -33,7 +33,7 @@ refuses servers added that way, so the wrapper moves them into the plugin:
    - Claude Code: `t3-code` from the Agent SDK's `mcp_set_servers` control request, which T3
      Code also sends when it rotates the credential.
 3. The CLI starts the plugin's bridge, which only pipes stdio to the wrapper over a private
-   channel named by `T3_MCP_SOCKET` (a Unix socket, or a named pipe on Windows). The wrapper
+   channel named by `T3_MCP_BRIDGE` (a Unix socket, or a named pipe on Windows). The wrapper
    answers as the MCP server and sends each tool call to T3 Code with the calling thread's
    credential, one MCP session per credential.
 4. Identity:
@@ -58,7 +58,7 @@ settings copy what T3 Code sends each thread today, in `codexThreadRuntimeParams
 | Setting                                                                | Why                                                                                                                                                                                                                                                   |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `command`, `args`                                                      | The bridge. Each policy allows the server only when these match exactly.                                                                                                                                                                              |
-| `env_vars: ["T3_MCP_SOCKET"]` (Codex)                                  | Codex starts MCP servers with a reduced environment. Without this the bridge cannot find the wrapper and serves no tools.                                                                                                                             |
+| `env_vars: ["T3_MCP_BRIDGE"]` (Codex)                                  | Codex starts MCP servers with a reduced environment. Without this the bridge cannot find the wrapper and serves no tools.                                                                                                                             |
 | `tool_timeout_sec: 3900` (Codex), `timeout: 3900000` (Claude Code, ms) | 65 minutes. `t3_thread_wait` can block for an hour.                                                                                                                                                                                                   |
 | `t3-code` and `t3-code-direct` (Codex)                                 | The same bridge registered twice. Code Mode would run the blocking `t3_thread_wait` as a nested call while the model keeps working, so `t3-code` disables it and `t3-code-direct` carries only that tool, hidden from Code Mode and deferred loading. |
 
@@ -103,10 +103,10 @@ socket. See `apps/server/src/mcp/mcpUnixSocket.ts`.
 - The bridge channel lives in a new owner-only directory under `XDG_RUNTIME_DIR` (or the temp
   directory). The wrapper removes it on exit and forwards SIGTERM, SIGINT, and SIGHUP to the CLI.
   A directory left by SIGKILL is removed by the next wrapper start.
-- Codex agent shells do not see `T3_MCP_SOCKET`: `t3-codex` adds
+- Codex agent shells do not see `T3_MCP_BRIDGE`: `t3-codex` adds
   `shell_environment_policy.filters."T3_MCP_*" = "exclude"` to each thread it rewrites.
 - Claude Code passes its environment to Bash and has no per-variable filter, so Bash in a Claude
-  thread can see `T3_MCP_SOCKET`. It reaches only that thread's own T3 Code access, which the
+  thread can see `T3_MCP_BRIDGE`. It reaches only that thread's own T3 Code access, which the
   agent already has.
 - A process that finds a Codex wrapper's channel can make tool calls as any thread on that
   app-server. Its name is in the app-server's environment, which unsandboxed processes running
@@ -122,7 +122,7 @@ the server failed to start; that does not block the session.
 
 Managed installs pin these: the marketplace name `t3`, the plugin ID `t3-code@t3`, the server
 names `t3-code` and `t3-code-direct`, the commands `t3-codex mcp-bridge` and `t3-claude
-mcp-bridge`, and the variable `T3_MCP_SOCKET`.
+mcp-bridge`, and the variable `T3_MCP_BRIDGE`.
 
 The wrappers also depend on how T3 Code hands over its server: `codexThreadRuntimeParams` and
 `claudeMcpQueryOverrides` in the provider adapters (a server named `t3-code` with `url` and an

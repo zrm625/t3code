@@ -1,5 +1,6 @@
 use crate::child::{self, Stdin};
 use crate::credentials::{Binding, Credential, Credentials, ParentLookup, RequestId, ThreadId};
+use crate::lock;
 use crate::proxy::Identity;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -26,7 +27,7 @@ pub fn run(args: Vec<OsString>) -> crate::Result<i32> {
     if args.first().is_none_or(|arg| arg != "app-server") {
         return child::passthrough(&real, &args);
     }
-    Ok(child::runtime()?.block_on(app_server(&real, &args))?)
+    Ok(crate::runtime()?.block_on(app_server(&real, &args))?)
 }
 
 async fn app_server(real: &Path, args: &[OsString]) -> std::io::Result<i32> {
@@ -65,12 +66,6 @@ struct Codex {
 /// Replies the wrapper's own requests are waiting for.
 #[derive(Default)]
 struct Replies(Mutex<HashMap<RequestId, oneshot::Sender<Value>>>);
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 impl Replies {
     fn is_waiting(&self) -> bool {
@@ -229,7 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn moves_t3_servers_out_of_thread_requests() {
-        let credentials = Credentials::new(Box::new(|_| Box::pin(async { Ok(None) })));
+        let credentials = Credentials::without_parents();
         let mut config: Map<String, Value> =
             serde_json::from_str(include_str!("../fixtures/codex-mcp-servers.json")).unwrap();
         config.insert("model".into(), json!("m"));
