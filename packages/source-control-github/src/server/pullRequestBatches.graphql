@@ -1,58 +1,75 @@
 # One pull request per operation. `GraphQLResolver.aliased` repeats each under an alias per
 # pull request, so a batch is one request and a missing pull request fails only its own slice.
-# `stacks` is false off github.com: Enterprise Server has no pull request stacks.
 
-query PullRequestSummary($owner: String!, $name: String!, $number: Int!, $stacks: Boolean!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      number
-      title
-      url
+fragment PullRequestSummaryFields on PullRequest {
+  number
+  title
+  url
+  state
+  isDraft
+  mergeable
+  reviewDecision
+  additions
+  deletions
+  changedFiles
+  updatedAt
+  mergedAt
+  closedAt
+  headRefName
+  baseRefName
+  author {
+    login
+    avatarUrl
+    ... on User {
+      name
+    }
+  }
+  latestReviews(first: 20) {
+    nodes {
       state
-      isDraft
-      mergeable
-      reviewDecision
-      additions
-      deletions
-      changedFiles
-      updatedAt
-      mergedAt
-      closedAt
-      headRefName
-      baseRefName
+      isMinimized
       author {
         login
-        avatarUrl
-        ... on User {
-          name
-        }
       }
-      latestReviews(first: 20) {
-        nodes {
+    }
+  }
+  commits(last: 1) {
+    nodes {
+      commit {
+        statusCheckRollup {
           state
-          isMinimized
-          author {
-            login
-          }
         }
       }
-      commits(last: 1) {
-        nodes {
-          commit {
-            statusCheckRollup {
-              state
-            }
-          }
-        }
-      }
-      stack @include(if: $stacks) {
-        number
-        size
-        baseRefName
-      }
-      stackEntry @include(if: $stacks) {
-        position
-      }
+    }
+  }
+}
+
+# github.com only. Enterprise Server has no pull request stacks, and it rejects a document that
+# names these fields even under `@include(if: false)`.
+fragment PullRequestStackFields on PullRequest {
+  stack {
+    number
+    size
+    baseRefName
+  }
+  stackEntry {
+    position
+  }
+}
+
+query PullRequestSummary($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      ...PullRequestSummaryFields
+    }
+  }
+}
+
+query PullRequestSummaryWithStacks($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      ...PullRequestSummaryFields
+      ...PullRequestStackFields
     }
   }
 }
@@ -69,14 +86,7 @@ query PullRequestStats($owner: String!, $name: String!, $number: Int!) {
 query PullRequestStackMembership($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      stack {
-        number
-        size
-        baseRefName
-      }
-      stackEntry {
-        position
-      }
+      ...PullRequestStackFields
     }
   }
 }

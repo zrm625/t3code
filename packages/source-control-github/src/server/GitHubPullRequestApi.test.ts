@@ -1061,6 +1061,8 @@ layer("GitHubPullRequestApi.layer", (it) => {
         mergedAt: null,
         closedAt: null,
         commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] },
+        stack: number === 7 ? { number: 3, size: 2, baseRefName: "main" } : null,
+        stackEntry: number === 7 ? { position: 1 } : null,
       });
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
@@ -1113,6 +1115,10 @@ layer("GitHubPullRequestApi.layer", (it) => {
         },
       );
       assert.strictEqual(eight?.headBranch, "feat/8");
+      assert.deepStrictEqual(
+        [seven?.stack, eight?.stack],
+        [{ number: 3, size: 2, base: "main", position: 1 }, null],
+      );
       expect(mockedExecute).toHaveBeenCalledOnce();
       expect(queryAt(0)).toContain(
         "_0_repository:repository(owner:$_0_owner name:$_0_name){pullRequest(number:$_0_number)",
@@ -1121,7 +1127,6 @@ layer("GitHubPullRequestApi.layer", (it) => {
         _0_owner: "acme",
         _0_name: "web",
         _0_number: 7,
-        _0_stacks: true,
         _1_number: 8,
       });
     }),
@@ -1579,7 +1584,11 @@ layer("GitHubPullRequestApi.layer", (it) => {
       mockedExecute.mockReturnValue(
         Effect.succeed(
           searchPage([
-            searchItem(7, "acme/web", "2026-07-03T00:00:00Z"),
+            {
+              ...searchItem(7, "acme/web", "2026-07-03T00:00:00Z"),
+              stack: { number: 3, size: 2, baseRefName: "main" },
+              stackEntry: { position: 2 },
+            },
             searchItem(9, "pingdotgg/t3code", "2026-07-02T00:00:00Z"),
             {},
           ]),
@@ -1610,6 +1619,10 @@ layer("GitHubPullRequestApi.layer", (it) => {
           [0, 0],
           [0, 0],
         ],
+      );
+      assert.deepStrictEqual(
+        batch.items.map((item) => item.stack),
+        [{ number: 3, size: 2, base: "main", position: 2 }, undefined],
       );
       assert.isFalse(batch.truncated);
     }),
@@ -2889,7 +2902,8 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
-  it.effect("names the host on every repository it addresses", () =>
+  // Enterprise Server rejects a document naming a field it lacks, even under `@include(if: false)`.
+  it.effect("names the host, and no stack field, in every Enterprise read", () =>
     Effect.gen(function* () {
       mockedExecute.mockImplementation((call) =>
         Effect.succeed(
@@ -2899,21 +2913,36 @@ layer("GitHubPullRequestApi.layer", (it) => {
         ),
       );
       const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
-
-      yield* cli.listPullRequests({
+      const listing = {
         cwd: "/w",
-        repository: "acme/web",
         host: "github.acme.dev",
         state: "open",
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-      });
+      } as const;
 
-      assert.isAbove(mockedExecute.mock.calls.length, 0);
-      expect(new Set(mockedExecute.mock.calls.map(([call]) => call.host))).toEqual(
-        new Set(["github.acme.dev"]),
-      );
+      yield* cli.listPullRequests({ ...listing, repository: "acme/web" });
+      yield* cli.searchPullRequests({ ...listing, repositories: ["acme/web"] });
+      const summary = yield* cli
+        .getPullRequestSummary({ ...listing, repository: "acme/web", number: 7 })
+        .pipe(Effect.ignore, Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.join(summary);
+
+      const calls = mockedExecute.mock.calls.map(([call]) => call);
+      expect(
+        calls.map((call) => (call.kind === "graphql" ? call.operationName : call.kind)),
+      ).toEqual([
+        "PullRequestSearch",
+        "PullRequestList",
+        "PullRequestSearch",
+        "PullRequestSummary",
+      ]);
+      for (const call of calls) {
+        expect(call.host).toBe("github.acme.dev");
+        if (call.kind === "graphql") expect(call.query).not.toMatch(/\bstack/);
+      }
       expect(searchOfCall(0)).toContain("repo:acme/web");
     }),
   );
