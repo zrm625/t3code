@@ -1777,9 +1777,8 @@ export const make = Effect.gen(function* () {
           operation: "getPullRequestSummary",
         });
       }
-      const result = hasStacks(input.host)
-        ? yield* GraphQLResolver.request(lookup, stackedSummaryResolver)
-        : yield* GraphQLResolver.request(lookup, summaryResolver);
+      const resolver = hasStacks(input.host) ? stackedSummaryResolver : summaryResolver;
+      const result = yield* GraphQLResolver.request(lookup, resolver);
       const pullRequest = result.repository?.pullRequest;
       if (pullRequest == null) {
         return yield* new GitHubRequestPolicy.GitHubApiNotFoundError({
@@ -2023,16 +2022,14 @@ export const make = Effect.gen(function* () {
           operation: "searchPullRequests",
         });
       }
-      const variables = {
+      const search = hasStacks(input.host)
+        ? client.PullRequestSearchWithStacks
+        : client.PullRequestSearch;
+      return yield* search({
         q: query,
         first: Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS),
         stats: false,
-      };
-      return yield* (
-        hasStacks(input.host)
-          ? client.PullRequestSearchWithStacks(variables)
-          : client.PullRequestSearch(variables)
-      ).pipe(
+      }).pipe(
         graphql({ ...input, operation: "searchPullRequests" }),
         Effect.map(({ search }) => {
           const page = toPullRequestRows(search);
