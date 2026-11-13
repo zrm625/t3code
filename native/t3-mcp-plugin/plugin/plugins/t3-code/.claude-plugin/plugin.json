@@ -1,0 +1,8 @@
+{
+  "name": "t3-code",
+  "version": "0.1.0",
+  "description": "Connects Claude Code sessions started by T3 Code to T3 Code's tools.",
+  "author": { "name": "T3 Tools" },
+  "homepage": "https://t3.codes",
+  "keywords": ["t3-code", "orchestration"]
+}

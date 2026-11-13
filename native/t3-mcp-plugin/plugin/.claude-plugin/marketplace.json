@@ -1,0 +1,11 @@
+{
+  "name": "t3",
+  "owner": { "name": "T3 Tools" },
+  "plugins": [
+    {
+      "name": "t3-code",
+      "source": "./plugins/t3-code",
+      "description": "Connects Claude Code sessions started by T3 Code to T3 Code's tools."
+    }
+  ]
+}

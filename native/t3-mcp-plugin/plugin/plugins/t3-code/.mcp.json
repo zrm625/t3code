@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "t3-code": {
+      "command": "t3-claude",
+      "args": ["mcp-bridge"],
+      "timeout": 3900000
+    }
+  }
+}

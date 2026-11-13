@@ -1,0 +1,13 @@
+# Example Codex admin policy: MCP servers only from approved plugins.
+# Deploy as /etc/codex/requirements.toml (Linux) or through your device management tool.
+
+# No MCP server may come from config.toml, launch arguments, or per-thread config.
+[mcp_servers.none-allowed-from-config.identity]
+command = "/nonexistent"
+
+# The T3 Code plugin's two servers, pinned to exactly `t3-codex mcp-bridge`.
+[plugins."t3-code@t3".mcp_servers.t3-code.identity]
+command = { executable = "t3-codex", args = [{ match = "exact", value = "mcp-bridge" }] }
+
+[plugins."t3-code@t3".mcp_servers.t3-code-direct.identity]
+command = { executable = "t3-codex", args = [{ match = "exact", value = "mcp-bridge" }] }
