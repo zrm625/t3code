@@ -3,13 +3,13 @@
     "url": "http://127.0.0.1:3773/mcp",
     "tool_timeout_sec": 3900,
     "http_headers": { "Authorization": "Bearer token" },
-    "disabled_tools": ["t3_thread_wait"]
+    "disabled_tools": ["t3_thread_wait", "delegate_task"]
   },
   "mcp_servers.t3-code-direct": {
     "url": "http://127.0.0.1:3773/mcp",
     "tool_timeout_sec": 3900,
     "http_headers": { "Authorization": "Bearer token" },
-    "enabled_tools": ["t3_thread_wait"],
+    "enabled_tools": ["t3_thread_wait", "delegate_task"],
     "omit_tools_from": ["code_mode", "deferred"]
   }
 }
