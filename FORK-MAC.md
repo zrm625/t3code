@@ -6,11 +6,12 @@ order. Run each check, and stop and report to Zak when one fails. Zak prefers sh
 
 ## This build
 
-The `integration` branch of github.com/zrm625/t3code, as pushed on 2026-11-09T14:21Z:
+The `integration` branch of github.com/zrm625/t3code, refreshed on 2026-11-16:
 
-- Base: T3 Code Nightly `0.1.8-nightly.20261109.4399`, upstream commit `357fb754fa9dae4111f0945fb8a13d30b012a62a`
-- Merged on top: #1 (`pyre/installable-mcp-plugin`), #2 (`pyre/ghes-stack-fields`)
-- The top commit only adds this file. The app is built from the commit before it.
+- Base: T3 Code Nightly `0.1.10-nightly.20261116.4787`, upstream commit `b5554ac8114f2ce7ce8b5973690ccb8cbb248efd`.
+- Merged on top: #1 (`pyre/installable-mcp-plugin`), #2 (`pyre/ghes-stack-fields`), and the MCP plugin's updated delegation routing.
+- Build commit: `3c092a7a6d6bc8a57686553dd38d3ad20f78b618`. The commands below pin this commit even if `integration` advances.
+- Local app version: `0.1.10-preview.20261116.1`. This preview keeps the Beta app name and has no update feed.
 
 ## Rules
 
@@ -33,10 +34,11 @@ anything that turns out different.
   Both use `~/.t3` and `~/Library/Application Support/t3code-v2`, so threads and settings carry over.
 - **One app at a time.** If one app is running, opening the other only brings the running one to the
   front.
-- **Same version.** An older build does not refuse a database that a newer build has upgraded. It
-  runs with a warning, so a mismatch fails quietly. Keep Nightly at exactly the version above.
-- **Missing from a local build:** auto-updates, T3 Connect, T3 account sign-in and passkeys. It is
-  also unsigned, which is fine on the Mac that built it.
+- **Same source base.** The fork uses the source of the Nightly release above, with no fork database
+  migrations. An older build can run against a newer database with only a warning. Keep Nightly at
+  exactly that release while both apps share data; the fork's preview version is deliberately different.
+- **Local build.** This guide produces an unsigned preview without auto-updates. Account sign-in and
+  T3 Connect depend on build configuration; this guide does not configure them or macOS passkey signing.
 - **Saved remote connections** probably won't load in the Beta app, because macOS stores each app's
   encryption key under the app's name. Nightly keeps them. This is expected.
 - **`t3code://` links** can open in either app, because both share the same app ID.
@@ -51,11 +53,11 @@ vp --version                 # Vite+; if missing: curl -fsSL https://vite.plus |
 defaults read "/Applications/T3 Code (Nightly).app/Contents/Info" CFBundleShortVersionString
 ```
 
-The last command must print `0.1.8-nightly.20261109.4399`.
+The last command must print `0.1.10-nightly.20261116.4787`.
 
 - **Older:** stop. Ask Zak to update Nightly, start it once, and tell you when it's done.
-- **Newer:** stop. Tell Zak to run `t3-fork-build` on forge (or ask the agent there to), which
-  refreshes this branch. Then start again from the top of the new copy of this file.
+- **Newer:** stop. Refresh the fork's integration branch against that Nightly's source and update
+  this guide before building. Then start again from the top of the new copy of this file.
 
 ## 2. Build the app
 
@@ -65,14 +67,14 @@ Use a checkout outside `~/.t3`, for example `~/src/t3code-fork`:
 git clone https://github.com/pingdotgg/t3code.git ~/src/t3code-fork   # skip if it already exists
 cd ~/src/t3code-fork
 git fetch https://github.com/zrm625/t3code.git integration
-git switch --detach FETCH_HEAD
-git merge-base --is-ancestor 357fb754fa9dae4111f0945fb8a13d30b012a62a HEAD && echo base-ok
+git switch --detach 3c092a7a6d6bc8a57686553dd38d3ad20f78b618
+git merge-base --is-ancestor b5554ac8114f2ce7ce8b5973690ccb8cbb248efd HEAD && echo base-ok
 vp i
-vp run dist:desktop:dmg
-ls release/*.dmg
+vp run dist:desktop:dmg --arch arm64 --build-version 0.1.10-preview.20261116.1
+ls release/T3-Code-0.1.10-preview.20261116.1-arm64.dmg
 ```
 
-Check: `base-ok` is printed, and a file `release/T3-Code-<version>-arm64.dmg` exists. The build stops
+Check: `base-ok` is printed, and the named DMG exists. The build stops
 early with a clear message if `cargo`, `clang`, `make`, `sips` or `iconutil` is missing. Pass that
 message on to Zak.
 
@@ -91,7 +93,7 @@ step.
 ## 4. Install the app
 
 ```sh
-hdiutil attach release/T3-Code-*-arm64.dmg -nobrowse -mountpoint /tmp/t3-fork-dmg
+hdiutil attach release/T3-Code-0.1.10-preview.20261116.1-arm64.dmg -nobrowse -mountpoint /tmp/t3-fork-dmg
 ditto "/tmp/t3-fork-dmg/T3 Code (Beta).app" "/Applications/T3 Code (Beta).app"
 hdiutil detach /tmp/t3-fork-dmg
 ```
@@ -133,14 +135,14 @@ jq '.providerInstances // {} | map_values({driver, setupMode: .config.setupMode,
 - **Wrappers:** each finds the first real `codex` or `claude` on `PATH` that isn't itself. T3 Code
   gives them the PATH of Zak's login shell.
 - **Codex setup mode:** if the Codex instance shows `setupMode: "managed"`, tell Zak to switch Codex
-  to their own install. A managed Codex ignores the binary path and is older than 0.167.0.
+  to their own install so T3 Code uses the wrapper binary path.
 
 Then give Zak the values to enter in **Settings → Providers** (a leading `~` works):
 
 - **Codex binary path:** `~/.local/share/t3-mcp/bin/t3-codex`
 - **Claude binary path:** `~/.local/share/t3-mcp/bin/t3-claude`
 
-The wrappers also work under Nightly, as long as Nightly is the same version as this build.
+The wrappers also work under the matching Nightly release listed above.
 
 ### Optional: the Unix socket
 
@@ -170,7 +172,8 @@ Tell Zak, in this order:
 
 ## 7. Check it works (Zak, or an agent inside the Beta app)
 
-- **The right app is running.** In T3 Code (Beta), About shows the upstream commit above.
+- **The right app is running.** In T3 Code (Beta), About shows version
+  `0.1.10-preview.20261116.1` and build commit `3c092a7a6d6b`, not the upstream base commit.
 - **The plugin works (if you did step 5).** Start a new thread on Claude Haiku or Codex Luna and
   send: "Call the T3 Code tool t3_project_list once and reply with the number of projects."
   - A number: the plugin works.
@@ -190,6 +193,7 @@ Send Zak a short report:
 
 When Nightly updates:
 
-1. Have `t3-fork-build` rerun on forge. That refreshes this branch and this file.
+1. Sync the fork's integration branch with the new Nightly's source, retain the PR changes that are
+   still needed, and refresh this file's source commit, Nightly release, and preview version together.
 2. Repeat steps 1–4, and step 5's build and install lines if the plugin is in use.
-3. Never run the Beta app on a database Nightly has upgraded past the Beta's version.
+3. Never run the Beta app on a database Nightly has upgraded past the fork's source base.
