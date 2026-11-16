@@ -1820,9 +1820,8 @@ export const make = Effect.gen(function* () {
           operation: "getPullRequestSummary",
         });
       }
-      const result = hasStacks(input.host)
-        ? yield* GraphQLResolver.request(lookup, stackedSummaryResolver)
-        : yield* GraphQLResolver.request(lookup, summaryResolver);
+      const resolver = hasStacks(input.host) ? stackedSummaryResolver : summaryResolver;
+      const result = yield* GraphQLResolver.request(lookup, resolver);
       const pullRequest = result.repository?.pullRequest;
       if (pullRequest == null) {
         return yield* new GitHubRequestPolicy.GitHubApiNotFoundError({
