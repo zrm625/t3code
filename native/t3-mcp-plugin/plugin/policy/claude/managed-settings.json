@@ -1,0 +1,6 @@
+{
+  "strictPluginOnlyCustomization": ["mcp"],
+  "strictKnownMarketplaces": [{ "source": "github", "repo": "<owner>/<repo-holding-this-plugin>" }],
+  "allowManagedMcpServersOnly": true,
+  "allowedMcpServers": [{ "serverCommand": ["t3-claude", "mcp-bridge"] }]
+}
