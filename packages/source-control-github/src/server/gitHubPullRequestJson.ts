@@ -872,8 +872,14 @@ function toRow(
   if (!Exit.isSuccess(decodedNode)) return null;
   const node = decodedNode.value;
   // Only rows from `PullRequestSearchWithStacks` carry a stack.
-  const decodedStack = decodeStack(entry);
-  const stack = Exit.isSuccess(decodedStack) ? toStackMembership(decodedStack.value) : undefined;
+  const decodedStack =
+    typeof entry === "object" && entry !== null && "stack" in entry && entry.stack != null
+      ? decodeStack(entry)
+      : undefined;
+  const stack =
+    decodedStack !== undefined && Exit.isSuccess(decodedStack)
+      ? toStackMembership(decodedStack.value)
+      : undefined;
   const reviewRequests = nodesOf(node.reviewRequests).flatMap(
     (request): ReadonlyArray<ReviewRequestFields> => {
       const reviewer = request.requestedReviewer;

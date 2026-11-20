@@ -1631,6 +1631,10 @@ layer("GitHubPullRequestApi.layer", (it) => {
         batch.items.map((item) => item.stack),
         [{ number: 3, size: 2, base: "main", position: 2 }, undefined],
       );
+      expect(callAt(0)).toMatchObject({
+        kind: "graphql",
+        operationName: "PullRequestSearchWithStacks",
+      });
       assert.deepStrictEqual(batch.items[0]?.labels, [
         { name: "bug", color: "ff0000", description: "Something is broken" },
       ]);
@@ -2967,8 +2971,37 @@ layer("GitHubPullRequestApi.layer", (it) => {
       mockedExecute.mockImplementation((call) =>
         Effect.succeed(
           call.kind === "graphql" && call.operationName === "PullRequestList"
-            ? emptyList()
-            : emptySearch(),
+            ? output(listedPullRequests(1, 7))
+            : call.kind === "graphql" && call.operationName === "PullRequestSummary"
+              ? output(
+                  encodeJson({
+                    data: {
+                      _0_repository: {
+                        pullRequest: {
+                          number: 7,
+                          title: "Enterprise PR",
+                          url: "https://github.acme.dev/acme/web/pull/7",
+                          author: null,
+                          baseRefName: "main",
+                          headRefName: "feat/7",
+                          state: "OPEN",
+                          isDraft: false,
+                          mergeable: "MERGEABLE",
+                          reviewDecision: null,
+                          latestReviews: { nodes: [] },
+                          additions: 1,
+                          deletions: 0,
+                          changedFiles: 1,
+                          updatedAt: "2026-08-24T12:34:56.000Z",
+                          mergedAt: null,
+                          closedAt: null,
+                          commits: { nodes: [] },
+                        },
+                      },
+                    },
+                  }),
+                )
+              : emptySearch(),
         ),
       );
       const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
@@ -2981,14 +3014,16 @@ layer("GitHubPullRequestApi.layer", (it) => {
         limit: 10,
       } as const;
 
-      yield* cli.listPullRequests({ ...listing, repository: "acme/web" });
+      const listed = yield* cli.listPullRequests({ ...listing, repository: "acme/web" });
       yield* cli.searchPullRequests({ ...listing, repositories: ["acme/web"] });
-      const summary = yield* cli
+      const summaryFiber = yield* cli
         .getPullRequestSummary({ ...listing, repository: "acme/web", number: 7 })
-        .pipe(Effect.ignore, Effect.forkChild);
+        .pipe(Effect.forkChild);
       yield* TestClock.adjust("10 millis");
-      yield* Fiber.join(summary);
+      const summary = yield* Fiber.join(summaryFiber);
 
+      expect(listed.items.map((item) => item.number)).toEqual([7]);
+      assert.isUndefined(summary.stack);
       const calls = mockedExecute.mock.calls.map(([call]) => call);
       expect(
         calls.map((call) => (call.kind === "graphql" ? call.operationName : call.kind)),

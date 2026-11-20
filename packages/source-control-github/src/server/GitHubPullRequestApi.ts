@@ -424,8 +424,8 @@ export interface GitHubPullRequestStat {
 const STAT_ALIASES_PER_REQUEST = 25;
 // Cache checks stagger reads across scheduler ticks; allow time to batch.
 const SUMMARY_BATCH_WINDOW = "10 millis";
-// Only github.com has pull request stacks; other hosts get documents that never name them.
-const hasStacks = (host: string) => host.toLowerCase() === "github.com";
+// Features that exist only on github.com (stacks, check `isRequired`, merge queue events).
+const isGitHubCom = (host: string) => normalizeHost(host) === "github.com";
 
 export interface GitHubPullRequestSearchBatch {
   readonly items: ReadonlyArray<GitHubPullRequestSearchItem>;
@@ -1437,9 +1437,6 @@ export const make = Effect.gen(function* () {
       return { oldContents, newContents };
     });
 
-  /** Older Enterprise servers may lack `isRequired`. */
-  const asksRequired = (host: string) => host.toLowerCase() === "github.com";
-
   /**
    * Every check context of the head commit, a page at a time, for a rollup the detail read cut at
    * its first hundred. Each page names the head it read, so a push mid-walk fails rather than
@@ -1460,7 +1457,7 @@ export const make = Effect.gen(function* () {
           owner,
           name,
           number: input.number,
-          required: asksRequired(input.host),
+          required: isGitHubCom(input.host),
           after,
         })
         .pipe(graphql(target));
@@ -1514,9 +1511,9 @@ export const make = Effect.gen(function* () {
           name,
           number: input.number,
           headRef: `refs/pull/${input.number}/head`,
-          required: asksRequired(input.host),
+          required: isGitHubCom(input.host),
           requestedReviewers,
-          mergeQueue: input.host.toLowerCase() === "github.com",
+          mergeQueue: isGitHubCom(input.host),
         })
         .pipe(toleratingMissingPullRef(decodePullRequestCore));
     return SourceControlRateLimit.Interactive.pipe(
@@ -1777,7 +1774,7 @@ export const make = Effect.gen(function* () {
           operation: "getPullRequestSummary",
         });
       }
-      const resolver = hasStacks(input.host) ? stackedSummaryResolver : summaryResolver;
+      const resolver = isGitHubCom(input.host) ? stackedSummaryResolver : summaryResolver;
       const result = yield* GraphQLResolver.request(lookup, resolver);
       const pullRequest = result.repository?.pullRequest;
       if (pullRequest == null) {
@@ -1806,7 +1803,7 @@ export const make = Effect.gen(function* () {
       const lookup = pullRequestLookup(input);
       if (lookup === null) return Effect.succeed(null);
       return GraphQLResolver.request(
-        { ...lookup, mergeQueue: input.host.toLowerCase() === "github.com" },
+        { ...lookup, mergeQueue: isGitHubCom(input.host) },
         watchFingerprintResolver,
       ).pipe(
         Effect.map((result) => {
@@ -1895,7 +1892,7 @@ export const make = Effect.gen(function* () {
         };
       });
       // Stack badges come from their own batched read below, for the rows that stay.
-      const stacks = hasStacks(input.host);
+      const stacks = isGitHubCom(input.host);
       const read = (
         continues: boolean,
         requestedRows = input.limit + 1,
@@ -2022,7 +2019,7 @@ export const make = Effect.gen(function* () {
           operation: "searchPullRequests",
         });
       }
-      const search = hasStacks(input.host)
+      const search = isGitHubCom(input.host)
         ? client.PullRequestSearchWithStacks
         : client.PullRequestSearch;
       return yield* search({
