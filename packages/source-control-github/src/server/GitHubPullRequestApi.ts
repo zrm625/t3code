@@ -80,6 +80,7 @@ import {
   isSubjectOfPullRequest,
   LenientPullRequestList,
   LenientPullRequestSearch,
+  LenientPullRequestSearchWithStacks,
   pageRows,
   pullRequestLookup,
   toLabelCandidates,
@@ -476,6 +477,8 @@ export interface GitHubPullRequestStat {
 const STAT_ALIASES_PER_REQUEST = 25;
 // Cache checks stagger reads across scheduler ticks; allow time to batch.
 const SUMMARY_BATCH_WINDOW = "10 millis";
+// Features that exist only on github.com (stacks, check `isRequired`, merge queue events).
+const isGitHubCom = (host: string) => normalizeHost(host) === "github.com";
 
 export interface GitHubPullRequestSearchBatch {
   readonly items: ReadonlyArray<GitHubPullRequestSearchItem>;
@@ -1033,7 +1036,11 @@ const GRAPHQL_MERGE_METHODS: Partial<
 
 const PullRequestGraphQLGroup = GraphQLGroup.merge(
   PullRequestBatchesGraphQLGroup,
-  GraphQLGroup.make(LenientPullRequestSearch, LenientPullRequestList),
+  GraphQLGroup.make(
+    LenientPullRequestSearch,
+    LenientPullRequestSearchWithStacks,
+    LenientPullRequestList,
+  ),
   PullRequestReadsGraphQLGroup,
   PullRequestReviewsGraphQLGroup,
   PullRequestMutationsGraphQLGroup,
@@ -1522,9 +1529,6 @@ export const make = Effect.gen(function* () {
       return { oldContents, newContents };
     });
 
-  /** Older Enterprise servers may lack `isRequired`. */
-  const asksRequired = (host: string) => host.toLowerCase() === "github.com";
-
   /**
    * Every check context of the head commit, a page at a time, for a rollup the detail read cut at
    * its first hundred. Each page names the head it read, so a push mid-walk fails rather than
@@ -1545,7 +1549,7 @@ export const make = Effect.gen(function* () {
           owner,
           name,
           number: input.number,
-          required: asksRequired(input.host),
+          required: isGitHubCom(input.host),
           after,
         })
         .pipe(graphql(target));
@@ -1599,9 +1603,9 @@ export const make = Effect.gen(function* () {
           name,
           number: input.number,
           headRef: `refs/pull/${input.number}/head`,
-          required: asksRequired(input.host),
+          required: isGitHubCom(input.host),
           requestedReviewers,
-          mergeQueue: input.host.toLowerCase() === "github.com",
+          mergeQueue: isGitHubCom(input.host),
         })
         .pipe(toleratingMissingPullRef(decodePullRequestCore));
     return SourceControlRateLimit.Interactive.pipe(
@@ -1845,6 +1849,12 @@ export const make = Effect.gen(function* () {
     RequestResolver.setDelay(SUMMARY_BATCH_WINDOW),
     RequestResolver.batchN(STAT_ALIASES_PER_REQUEST),
   );
+  const stackedSummaryResolver = GraphQLResolver.aliased(client.PullRequestSummaryWithStacks, {
+    batchKey: GitHubGraphQlClient.batchKey,
+  }).pipe(
+    RequestResolver.setDelay(SUMMARY_BATCH_WINDOW),
+    RequestResolver.batchN(STAT_ALIASES_PER_REQUEST),
+  );
   const getPullRequestSummary: GitHubPullRequestApi["Service"]["getPullRequestSummary"] = Effect.fn(
     "GitHubPullRequestApi.getPullRequestSummary",
   )(
@@ -1856,10 +1866,8 @@ export const make = Effect.gen(function* () {
           operation: "getPullRequestSummary",
         });
       }
-      const result = yield* GraphQLResolver.request(
-        { ...lookup, stacks: input.host.toLowerCase() === "github.com" },
-        summaryResolver,
-      );
+      const resolver = isGitHubCom(input.host) ? stackedSummaryResolver : summaryResolver;
+      const result = yield* GraphQLResolver.request(lookup, resolver);
       const pullRequest = result.repository?.pullRequest;
       if (pullRequest == null) {
         return yield* new GitHubRequestPolicy.GitHubApiNotFoundError({
@@ -1887,7 +1895,7 @@ export const make = Effect.gen(function* () {
       const lookup = pullRequestLookup(input);
       if (lookup === null) return Effect.succeed(null);
       return GraphQLResolver.request(
-        { ...lookup, mergeQueue: input.host.toLowerCase() === "github.com" },
+        { ...lookup, mergeQueue: isGitHubCom(input.host) },
         watchFingerprintResolver,
       ).pipe(
         Effect.map((result) => {
@@ -1939,7 +1947,8 @@ export const make = Effect.gen(function* () {
         endCursor: page.endCursor,
         pageInfo: { hasNextPage: page.endCursor !== null, endCursor: page.endCursor },
       });
-      const stacks = input.host.toLowerCase() === "github.com";
+      // Stack badges come from their own batched read below, for the rows that stay.
+      const stacks = isGitHubCom(input.host);
       // Search cannot exclude numbers, so the rows already delivered at the boundary come back
       // first; read past them so they do not use up the limit.
       const seenAt = new Set(input.cursor?.seenAt ?? []);
@@ -1956,8 +1965,6 @@ export const make = Effect.gen(function* () {
                   q: query,
                   first: pageRows(rows),
                   after,
-                  // Stack badges come from their own batched read below, for the rows that stay.
-                  stacks: false,
                   stats: true,
                 })
                 .pipe(Effect.map((result) => toPage(toPullRequestRows(result.search))))
@@ -1968,7 +1975,6 @@ export const make = Effect.gen(function* () {
                   states: LIST_STATES[input.state],
                   first: pageRows(rows),
                   after,
-                  stacks: false,
                   stats: true,
                 })
                 .pipe(
@@ -2084,7 +2090,9 @@ export const make = Effect.gen(function* () {
           ({ repository, number }) => `${repository.trim().toLowerCase()}#${number}`,
         ),
       );
-      const stacks = input.host.toLowerCase() === "github.com";
+      const search = isGitHubCom(input.host)
+        ? client.PullRequestSearchWithStacks
+        : client.PullRequestSearch;
       let endedShort = false;
       const {
         items: rawItems,
@@ -2093,24 +2101,22 @@ export const make = Effect.gen(function* () {
       } = yield* collect(
         Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS) + seenAt.size,
         (after, rows) =>
-          client
-            .PullRequestSearch({ q: query, first: pageRows(rows), after, stacks, stats: false })
-            .pipe(
-              graphql({ ...input, operation: "searchPullRequests" }),
-              Effect.map(({ search }) => {
-                const page = toPullRequestRows(search);
-                // A short page that says it has more is where this read stops, not a gap to read past.
-                const short = page.endCursor !== null && page.rawCount < pageRows(rows);
-                if (short) endedShort = true;
-                return {
-                  items: page.rows.flatMap(({ item, repository }) =>
-                    repository === null ? [] : [{ ...item, repository }],
-                  ),
-                  rawCount: page.rawCount,
-                  endCursor: short ? null : page.endCursor,
-                };
-              }),
-            ),
+          search({ q: query, first: pageRows(rows), after, stats: false }).pipe(
+            graphql({ ...input, operation: "searchPullRequests" }),
+            Effect.map(({ search }) => {
+              const page = toPullRequestRows(search);
+              // A short page that says it has more is where this read stops, not a gap to read past.
+              const short = page.endCursor !== null && page.rawCount < pageRows(rows);
+              if (short) endedShort = true;
+              return {
+                items: page.rows.flatMap(({ item, repository }) =>
+                  repository === null ? [] : [{ ...item, repository }],
+                ),
+                rawCount: page.rawCount,
+                endCursor: short ? null : page.endCursor,
+              };
+            }),
+          ),
       );
       const items = rawItems.filter(
         (item) =>
