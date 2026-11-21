@@ -6,12 +6,12 @@ order. Run each check, and stop and report to Zak when one fails. Zak prefers sh
 
 ## This build
 
-The `integration` branch of github.com/zrm625/t3code, refreshed on 2026-11-16:
+The `integration` branch of github.com/zrm625/t3code, refreshed on 2026-11-21:
 
-- Base: T3 Code Nightly `0.1.10-nightly.20261116.4787`, upstream commit `b5554ac8114f2ce7ce8b5973690ccb8cbb248efd`.
-- Merged on top: #1 (`pyre/installable-mcp-plugin`), #2 (`pyre/ghes-stack-fields`), and the MCP plugin's updated delegation routing.
-- Build commit: `3c092a7a6d6bc8a57686553dd38d3ad20f78b618`. The commands below pin this commit even if `integration` advances.
-- Local app version: `0.1.10-preview.20261116.1`. This preview keeps the Beta app name and has no update feed.
+- Base Nightly is `0.1.12-nightly.20261121.5051` at upstream commit `dd941b9c3b581b4a04539255fb85f2b0cbc3fa57`.
+- Fork PR #1 provides the marketplace plugin over loopback HTTP. Fork PR #2 fixes GitHub Enterprise Server pull request reads.
+- The build commands pin commit `f1151554df928ad3a179f14ead4f47f787c648c8`.
+- The local version is `0.1.12-preview.20261121.1`. This preview keeps the Beta app name and has no update feed.
 
 ## Rules
 
@@ -53,7 +53,7 @@ vp --version                 # Vite+; if missing: curl -fsSL https://vite.plus |
 defaults read "/Applications/T3 Code (Nightly).app/Contents/Info" CFBundleShortVersionString
 ```
 
-The last command must print `0.1.10-nightly.20261116.4787`.
+The last command must print `0.1.12-nightly.20261121.5051`.
 
 - **Older:** stop. Ask Zak to update Nightly, start it once, and tell you when it's done.
 - **Newer:** stop. Refresh the fork's integration branch against that Nightly's source and update
@@ -67,11 +67,11 @@ Use a checkout outside `~/.t3`, for example `~/src/t3code-fork`:
 git clone https://github.com/pingdotgg/t3code.git ~/src/t3code-fork   # skip if it already exists
 cd ~/src/t3code-fork
 git fetch https://github.com/zrm625/t3code.git integration
-git switch --detach 3c092a7a6d6bc8a57686553dd38d3ad20f78b618
-git merge-base --is-ancestor b5554ac8114f2ce7ce8b5973690ccb8cbb248efd HEAD && echo base-ok
+git switch --detach f1151554df928ad3a179f14ead4f47f787c648c8
+git merge-base --is-ancestor dd941b9c3b581b4a04539255fb85f2b0cbc3fa57 HEAD && echo base-ok
 vp i
-vp run dist:desktop:dmg --arch arm64 --build-version 0.1.10-preview.20261116.1
-ls release/T3-Code-0.1.10-preview.20261116.1-arm64.dmg
+vp run dist:desktop:dmg --arch arm64 --build-version 0.1.12-preview.20261121.1
+ls release/T3-Code-0.1.12-preview.20261121.1-arm64.dmg
 ```
 
 Check: `base-ok` is printed, and the named DMG exists. The build stops
@@ -93,7 +93,7 @@ step.
 ## 4. Install the app
 
 ```sh
-hdiutil attach release/T3-Code-0.1.10-preview.20261116.1-arm64.dmg -nobrowse -mountpoint /tmp/t3-fork-dmg
+hdiutil attach release/T3-Code-0.1.12-preview.20261121.1-arm64.dmg -nobrowse -mountpoint /tmp/t3-fork-dmg
 ditto "/tmp/t3-fork-dmg/T3 Code (Beta).app" "/Applications/T3 Code (Beta).app"
 hdiutil detach /tmp/t3-fork-dmg
 ```
@@ -142,22 +142,8 @@ Then give Zak the values to enter in **Settings → Providers** (a leading `~` w
 - **Codex binary path:** `~/.local/share/t3-mcp/bin/t3-codex`
 - **Claude binary path:** `~/.local/share/t3-mcp/bin/t3-claude`
 
-The wrappers also work under the matching Nightly release listed above.
-
-### Optional: the Unix socket
-
-Only if Zak's Mac blocks MCP over local TCP. Ask Zak before doing this:
-
-```sh
-mkdir -m700 -p ~/.t3/mcp
-launchctl setenv T3CODE_MCP_SOCKET "$HOME/.t3/mcp/mcp.sock"
-```
-
-- **Setting it:** use `launchctl`, not `.zshrc`. T3 Code doesn't take this variable from the login
-  shell. The setting is lost when the Mac restarts.
-- **Only the Beta app** has the socket feature. Under Nightly, the wrappers use TCP.
-- **If T3 Code (Beta) won't start after this** (missing folder, path over about 103 characters,
-  socket in use), run `launchctl unsetenv T3CODE_MCP_SOCKET` and have Zak open it again.
+Use a new provider session after installing an updated plugin. The wrappers use the existing
+loopback HTTP endpoint in both the Beta app and the matching Nightly release.
 
 ## 6. Hand over to Zak
 
@@ -173,7 +159,7 @@ Tell Zak, in this order:
 ## 7. Check it works (Zak, or an agent inside the Beta app)
 
 - **The right app is running.** In T3 Code (Beta), About shows version
-  `0.1.10-preview.20261116.1` and build commit `3c092a7a6d6b`, not the upstream base commit.
+  `0.1.12-preview.20261121.1` and build commit `f1151554df92`.
 - **The plugin works (if you did step 5).** Start a new thread on Claude Haiku or Codex Luna and
   send: "Call the T3 Code tool t3_project_list once and reply with the number of projects."
   - A number: the plugin works.
