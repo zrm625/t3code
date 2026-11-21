@@ -52,7 +52,7 @@ export class CodexAppServerClient extends Context.Service<
     readonly handleServerRequest: <M extends CodexRpc.ServerRequestMethod>(
       method: M,
       handler: (
-        payload: CodexRpc.ServerRequestParamsByMethod[M],
+        payload: ServerRequestParamsByMethod[M],
       ) => Effect.Effect<
         CodexRpc.ServerRequestResponsesByMethod[M],
         CodexError.CodexAppServerError
@@ -97,6 +97,25 @@ export const V2TurnStartParams = CodexSchema.V2TurnStartParams.pipe(
   }),
 );
 
+// The generated schema predates these fields. Keep unknown decision variants so callers can
+// leave requests they do not recognize with the user.
+export const V2CommandExecutionRequestApprovalParams =
+  CodexSchema.CommandExecutionRequestApprovalParams.pipe(
+    Schema.fieldsAssign({
+      additionalPermissions: Schema.optionalKey(Schema.Unknown),
+      availableDecisions: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.Unknown))),
+    }),
+  );
+
+const serverRequestParams = {
+  ...CodexRpc.SERVER_REQUEST_PARAMS,
+  "item/commandExecution/requestApproval": V2CommandExecutionRequestApprovalParams,
+};
+
+type ServerRequestParamsByMethod = {
+  readonly [M in CodexRpc.ServerRequestMethod]: (typeof serverRequestParams)[M]["Type"];
+};
+
 export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(function* (
   stdio: Stdio.Stdio,
   options: CodexAppServerClientOptions = {},
@@ -114,9 +133,8 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
 
   const getServerRequestParamSchema = <M extends CodexRpc.ServerRequestMethod>(
     method: M,
-  ):
-    | Schema.Codec<CodexRpc.ServerRequestParamsByMethod[M], CodexRpc.ServerRequestParamsByMethod[M]>
-    | undefined => CodexRpc.SERVER_REQUEST_PARAMS[method] as never;
+  ): Schema.Codec<ServerRequestParamsByMethod[M], ServerRequestParamsByMethod[M]> | undefined =>
+    serverRequestParams[method] as never;
 
   const getServerRequestResponseSchema = <M extends CodexRpc.ServerRequestMethod>(
     method: M,
@@ -206,7 +224,7 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   const dispatchRequest = (
     request: CodexProtocol.CodexAppServerIncomingRequest,
   ): Effect.Effect<unknown, CodexError.CodexAppServerError> => {
-    if (request.method in CodexRpc.SERVER_REQUEST_PARAMS) {
+    if (request.method in serverRequestParams) {
       const method = request.method as CodexRpc.ServerRequestMethod;
       const payloadSchema = getServerRequestParamSchema(method);
       const responseSchema = getServerRequestResponseSchema(method);

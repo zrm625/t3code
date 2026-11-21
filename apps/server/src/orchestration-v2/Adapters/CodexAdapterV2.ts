@@ -5930,6 +5930,30 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            const { runtimePolicy } = context.input;
+            const { availableDecisions } = payload;
+            // Codex can ask about its built-in dangerous-command check under the default granular
+            // policy. That check offers a one-time accept or cancel without requesting permissions.
+            if (
+              runtimePolicy.runtimeMode === "full-access" &&
+              runtimePolicy.approvalPolicy === undefined &&
+              runtimePolicy.sandboxPolicy === undefined &&
+              (payload.kind ?? "command") === "command" &&
+              payload.approvalId == null &&
+              payload.command &&
+              payload.reason == null &&
+              payload.additionalPermissions == null &&
+              payload.networkApprovalContext == null &&
+              payload.proposedExecpolicyAmendment == null &&
+              (payload.proposedNetworkPolicyAmendments?.length ?? 0) === 0 &&
+              availableDecisions?.length === 2 &&
+              availableDecisions.includes("accept") &&
+              availableDecisions.includes("cancel")
+            ) {
+              return {
+                decision: "accept",
+              } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
+            }
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("command")) {
               return {

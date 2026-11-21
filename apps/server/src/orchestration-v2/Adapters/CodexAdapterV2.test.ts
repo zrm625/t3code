@@ -1805,6 +1805,166 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  const commandApprovalCases: ReadonlyArray<{
+    readonly name: string;
+    readonly asks: boolean;
+    readonly request?: Partial<typeof CodexClient.V2CommandExecutionRequestApprovalParams.Type>;
+    readonly runtimeMode?: ProviderAdapter.ProviderAdapterV2RuntimePolicy["runtimeMode"];
+    readonly turnPolicy?: Parameters<typeof codexReplayPreamble>[0]["turnPolicy"];
+    readonly decision?: "cancel";
+  }> = [
+    { name: "Codex's built-in check", asks: false },
+    {
+      name: "a supervised turn",
+      asks: true,
+      runtimeMode: "approval-required",
+      turnPolicy: { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" } },
+    },
+    {
+      name: "an explicit approval policy",
+      asks: true,
+      turnPolicy: { approvalPolicy: "on-request" },
+    },
+    {
+      name: "an explicit sandbox policy",
+      asks: true,
+      turnPolicy: { sandboxPolicy: { type: "workspaceWrite" } },
+    },
+    { name: "an explicit reason", asks: true, request: { reason: "Requires approval by policy" } },
+    {
+      name: "a command rule proposal",
+      asks: true,
+      request: { proposedExecpolicyAmendment: ["rm", "-f"] },
+    },
+    {
+      name: "a managed network request",
+      asks: true,
+      request: { networkApprovalContext: { host: "example.com", protocol: "https" } },
+    },
+    {
+      name: "a network policy proposal",
+      asks: true,
+      request: { proposedNetworkPolicyAmendments: [{ action: "allow", host: "example.com" }] },
+    },
+    { name: "terminal input", asks: true, request: { kind: "writeStdin" } },
+    { name: "a shell bridge callback", asks: true, request: { approvalId: "bridge-callback" } },
+    { name: "a request without a command", asks: true, request: { command: null } },
+    {
+      name: "additional permissions",
+      asks: true,
+      request: { additionalPermissions: { network: { enabled: true } } },
+    },
+    { name: "unknown decision options", asks: true, request: { availableDecisions: null } },
+    {
+      name: "a cancel-only request",
+      asks: true,
+      request: { availableDecisions: ["cancel"] },
+      decision: "cancel",
+    },
+    {
+      name: "a session approval option",
+      asks: true,
+      request: { availableDecisions: ["accept", "acceptForSession", "cancel"] },
+    },
+  ];
+
+  it.effect.each(commandApprovalCases)(
+    "routes command approval for $name",
+    ({ name, asks, request, runtimeMode = "full-access", turnPolicy = {}, decision }) =>
+      Effect.gen(function* () {
+        const nativeThreadId = "command-approval-thread";
+        const nativeTurnId = "command-approval-turn";
+        const prompt = "Clean up the scratch file.";
+        const command = "touch scratch.txt && rm -f scratch.txt";
+        const terminalStatus = decision === "cancel" ? "interrupted" : "completed";
+        const pending = yield* Queue.unbounded<OrchestrationV2RuntimeRequest>();
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: `command-approval-${name}`,
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt, turnPolicy }),
+              {
+                type: "emit_inbound",
+                frame: {
+                  id: 0,
+                  method: "item/commandExecution/requestApproval",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    itemId: "exec-cleanup",
+                    startedAtMs: 1782622441000,
+                    command: `/bin/bash -lc '${command}'`,
+                    cwd: "/workspace",
+                    commandActions: [{ type: "unknown", command }],
+                    availableDecisions: ["accept", "cancel"],
+                    ...request,
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                frame: { id: 0, result: { decision: decision ?? "accept" } },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: terminalStatus }),
+                  },
+                },
+              },
+            ],
+          }),
+          (event) =>
+            event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
+              ? Queue.offer(pending, event.runtimeRequest)
+              : Effect.void,
+        );
+        const input = makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("command-approval-attempt"),
+          text: prompt,
+        });
+        yield* harness.runtime.startTurn({
+          ...input,
+          runtimePolicy: { ...input.runtimePolicy, runtimeMode, ...turnPolicy },
+        });
+        const approval = yield* Effect.raceFirst(
+          harness.firstTerminal.pipe(Effect.as(undefined)),
+          Queue.take(pending),
+        );
+        if (asks) {
+          assert.isDefined(approval, "The request must reach the user");
+          assert.equal(approval.kind, "command");
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: approval.id,
+            decision: decision ?? "accept",
+          });
+          yield* harness.firstTerminal;
+        } else {
+          assert.isUndefined(approval, "The command must run without a prompt");
+        }
+        assert.deepEqual(
+          harness.terminalEvents().map((event) => event.status),
+          [terminalStatus],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+  );
+
   it.effect.each(["native", "ordinary"] as const)(
     "resumes Codex without a prompt only for an existing conversation (%s)",
     (mode) =>
