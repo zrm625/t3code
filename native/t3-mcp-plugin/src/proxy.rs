@@ -323,7 +323,7 @@ impl Connection {
 
     async fn open(&self, credential: Credential) -> Result<Arc<Session>, Error> {
         let session = Arc::new(Session {
-            endpoint: Endpoint::new(&credential.url, credential.socket.clone())?,
+            endpoint: Endpoint::new(&credential.url)?,
             credential,
             id: Mutex::default(),
             protocol_version: OnceLock::new(),

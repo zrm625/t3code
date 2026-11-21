@@ -1,11 +1,9 @@
-use crate::ipc::{self, Stream};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response, Uri};
 use hyper_util::rt::TokioIo;
-use std::io;
-use std::path::PathBuf;
+use tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
 pub struct Endpoint {
@@ -13,11 +11,10 @@ pub struct Endpoint {
     /// `authority` with the default port filled in, for connecting over TCP.
     address: String,
     path: String,
-    socket: Option<PathBuf>,
 }
 
 impl Endpoint {
-    pub fn new(url: &str, socket: Option<PathBuf>) -> Result<Self, String> {
+    pub fn new(url: &str) -> Result<Self, String> {
         let invalid = || format!("T3 Code gave an MCP URL the plugin cannot use: {url}");
         let uri: Uri = url.parse().map_err(|_| invalid())?;
         let authority = uri
@@ -34,7 +31,6 @@ impl Endpoint {
             path: uri
                 .path_and_query()
                 .map_or_else(|| "/".to_owned(), ToString::to_string),
-            socket,
         })
     }
 }
@@ -56,23 +52,9 @@ pub async fn send(
         )
         .body(Full::new(Bytes::from(body)))
         .map_err(|error| format!("T3 Code MCP request is not valid: {error}"))?;
-    match &endpoint.socket {
-        Some(socket) => exchange(ipc::connect(socket.as_os_str()).await, request).await,
-        None => {
-            exchange(
-                tokio::net::TcpStream::connect(&endpoint.address).await,
-                request,
-            )
-            .await
-        }
-    }
-}
-
-async fn exchange(
-    connection: io::Result<impl Stream>,
-    request: Request<Full<Bytes>>,
-) -> Result<Response<Incoming>, String> {
-    let connection = connection.map_err(|error| format!("cannot reach T3 Code: {error}"))?;
+    let connection = TcpStream::connect(&endpoint.address)
+        .await
+        .map_err(|error| format!("cannot reach T3 Code: {error}"))?;
     let (mut sender, driver) = hyper::client::conn::http1::handshake(TokioIo::new(connection))
         .await
         .map_err(|error| format!("cannot reach T3 Code: {error}"))?;

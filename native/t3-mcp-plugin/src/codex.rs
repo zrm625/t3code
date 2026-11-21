@@ -44,10 +44,9 @@ async fn app_server(real: &Path, args: &[OsString]) -> std::io::Result<i32> {
     });
     let credentials = Arc::new(Credentials::new(parent_of));
 
-    let t3_socket = child::t3_socket();
     let from_t3 = Arc::clone(&credentials);
     child::read_from_t3(Arc::clone(&codex.stdin), move |line| {
-        take_t3_servers_from(&line, &from_t3, t3_socket.as_deref()).unwrap_or(line)
+        take_t3_servers_from(&line, &from_t3).unwrap_or(line)
     });
     let (to_t3, replies) = (Arc::clone(&credentials), Arc::clone(&codex));
     let stdout = process.stdout.take().expect("piped stdout");
@@ -122,11 +121,7 @@ impl Codex {
 /// T3 Code puts its MCP servers, with each thread's own credential, in every thread request's
 /// config. The admin policy refuses MCP servers from config, so they move into the plugin.
 /// `None` leaves the line as it is.
-fn take_t3_servers_from(
-    line: &[u8],
-    credentials: &Credentials,
-    t3_socket: Option<&Path>,
-) -> Option<Vec<u8>> {
+fn take_t3_servers_from(line: &[u8], credentials: &Credentials) -> Option<Vec<u8>> {
     #[derive(Deserialize)]
     struct Head<'a> {
         #[serde(borrow)]
@@ -141,7 +136,7 @@ fn take_t3_servers_from(
     let id = head.id.filter(|_| is_thread_request)?;
     let mut message: Value = serde_json::from_slice(line).ok()?;
     let config = message.pointer_mut("/params/config")?.as_object_mut()?;
-    let binding = take_t3_servers(config, t3_socket)?;
+    let binding = take_t3_servers(config)?;
     config.insert(SHELL_FILTER_KEY.to_owned(), json!("exclude"));
     if let Err(error) = &binding {
         eprintln!("t3-codex: {error}");
@@ -153,7 +148,7 @@ fn take_t3_servers_from(
 }
 
 /// Removes T3 Code's servers (`mcp_servers.t3-code`, ...). `None` if there were none.
-fn take_t3_servers(config: &mut Map<String, Value>, t3_socket: Option<&Path>) -> Option<Binding> {
+fn take_t3_servers(config: &mut Map<String, Value>) -> Option<Binding> {
     let taken: Vec<Value> = T3_SERVERS
         .iter()
         .filter_map(|name| config.remove(&format!("mcp_servers.{name}")))
@@ -169,7 +164,6 @@ fn take_t3_servers(config: &mut Map<String, Value>, t3_socket: Option<&Path>) ->
         Some(Credential {
             url: server.get("url")?.as_str()?.to_owned(),
             authorization: authorization.as_str()?.to_owned(),
-            socket: t3_socket.map(Path::to_path_buf),
         })
     });
     Some(credential.ok_or_else(|| {
@@ -229,7 +223,7 @@ mod tests {
             serde_json::from_str(include_str!("../fixtures/codex-mcp-servers.json")).unwrap();
         config.insert("model".into(), json!("m"));
         let start = json!({ "id": 7, "method": "thread/start", "params": { "config": config } });
-        let rewritten = take_t3_servers_from(start.to_string().as_bytes(), &credentials, None);
+        let rewritten = take_t3_servers_from(start.to_string().as_bytes(), &credentials);
         let rewritten: Value = serde_json::from_slice(&rewritten.unwrap()).unwrap();
         assert_eq!(
             rewritten["params"]["config"],
@@ -246,7 +240,6 @@ mod tests {
             Ok(Credential {
                 url: "http://127.0.0.1:3773/mcp".into(),
                 authorization: "Bearer token".into(),
-                socket: None,
             })
         );
     }

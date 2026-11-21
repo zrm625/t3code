@@ -5,14 +5,14 @@
       "args": ["mcp-bridge"],
       "env_vars": ["T3_MCP_BRIDGE"],
       "tool_timeout_sec": 3900,
-      "disabled_tools": ["t3_thread_wait"]
+      "disabled_tools": ["t3_thread_wait", "delegate_task"]
     },
     "t3-code-direct": {
       "command": "t3-codex",
       "args": ["mcp-bridge"],
       "env_vars": ["T3_MCP_BRIDGE"],
       "tool_timeout_sec": 3900,
-      "enabled_tools": ["t3_thread_wait"],
+      "enabled_tools": ["t3_thread_wait", "delegate_task"],
       "omit_tools_from": ["code_mode", "deferred"]
     }
   }

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -14,8 +13,6 @@ const MAX_PARENT_DEPTH: usize = 8;
 pub struct Credential {
     pub url: String,
     pub authorization: String,
-    /// Reach `url` through this socket instead of TCP (T3 Code's `T3CODE_MCP_SOCKET`).
-    pub socket: Option<PathBuf>,
 }
 
 /// A thread's credential, or why T3 Code's config for it could not be read.
@@ -174,7 +171,6 @@ mod tests {
         Credential {
             url: "http://h/mcp".into(),
             authorization: format!("Bearer {token}"),
-            socket: None,
         }
     }
 

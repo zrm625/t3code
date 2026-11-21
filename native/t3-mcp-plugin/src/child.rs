@@ -15,9 +15,6 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-/// T3 Code's opt-in Unix socket (or pipe) for `/mcp`; when set, sessions use it instead of TCP.
-const T3CODE_MCP_SOCKET_ENV: &str = "T3CODE_MCP_SOCKET";
-
 /// `real_env`, else the first `name` on PATH that is not this program.
 pub fn real_binary(name: &str, real_env: &str) -> crate::Result<PathBuf> {
     if let Some(path) = std::env::var_os(real_env).filter(|path| !path.is_empty()) {
@@ -40,12 +37,6 @@ pub fn real_binary(name: &str, real_env: &str) -> crate::Result<PathBuf> {
                     .is_some_and(|path| Some(path) != own)
         })
         .ok_or_else(|| format!("no {name} on PATH; set {real_env}").into())
-}
-
-pub fn t3_socket() -> Option<PathBuf> {
-    std::env::var_os(T3CODE_MCP_SOCKET_ENV)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
 }
 
 #[cfg(unix)]

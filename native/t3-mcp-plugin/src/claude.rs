@@ -37,10 +37,9 @@ async fn session(real: &Path, args: &[OsString]) -> std::io::Result<i32> {
     let stdin = Arc::new(Stdin::start(process.stdin.take().expect("piped stdin")));
     let credentials = Arc::new(Credentials::without_parents());
 
-    let t3_socket = child::t3_socket();
     let from_t3 = Arc::clone(&credentials);
     child::read_from_t3(stdin, move |line| {
-        let line = take_t3_server_from(&line, &from_t3, t3_socket.as_deref()).unwrap_or(line);
+        let line = take_t3_server_from(&line, &from_t3).unwrap_or(line);
         replace(&line, T3_TOOLS, PLUGIN_TOOLS).into_owned()
     });
     let stdout = process.stdout.take().expect("piped stdout");
@@ -51,11 +50,7 @@ async fn session(real: &Path, args: &[OsString]) -> std::io::Result<i32> {
 /// T3 Code sends its MCP server, with this thread's credential, in an `mcp_set_servers` control
 /// request (the Agent SDK's `setMcpServers`), again whenever it rotates the credential. The admin
 /// policy refuses servers added that way, so it moves into the plugin. `None` leaves the line.
-fn take_t3_server_from(
-    line: &[u8],
-    credentials: &Credentials,
-    t3_socket: Option<&Path>,
-) -> Option<Vec<u8>> {
+fn take_t3_server_from(line: &[u8], credentials: &Credentials) -> Option<Vec<u8>> {
     if !contains(line, b"mcp_set_servers") {
         return None;
     }
@@ -85,7 +80,6 @@ fn take_t3_server_from(
     credentials.set_newest(Credential {
         url: url.to_owned(),
         authorization: authorization.to_owned(),
-        socket: t3_socket.map(Path::to_path_buf),
     });
     servers.remove(T3_SERVER);
     let mut rewritten = message.to_string().into_bytes();
@@ -148,7 +142,7 @@ mod tests {
         servers["other"] = json!({ "type": "stdio", "command": "x" });
         let set = json!({ "type": "control_request", "request_id": "r1",
             "request": { "subtype": "mcp_set_servers", "servers": servers } });
-        let rewritten = take_t3_server_from(set.to_string().as_bytes(), &credentials, None);
+        let rewritten = take_t3_server_from(set.to_string().as_bytes(), &credentials);
         let rewritten: Value = serde_json::from_slice(&rewritten.unwrap()).unwrap();
         assert_eq!(
             rewritten["request"]["servers"],
@@ -159,11 +153,10 @@ mod tests {
             Some(Credential {
                 url: "http://127.0.0.1:3773/mcp".into(),
                 authorization: "Bearer token".into(),
-                socket: None,
             })
         );
         let prompt = br#"{"type":"user","message":"mcp_set_servers"}"#;
-        assert_eq!(take_t3_server_from(prompt, &credentials, None), None);
+        assert_eq!(take_t3_server_from(prompt, &credentials), None);
     }
 
     #[test]
