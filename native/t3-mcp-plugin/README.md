@@ -1,8 +1,8 @@
 # t3-mcp-plugin
 
 Gives Codex and Claude Code sessions started by T3 Code access to T3 Code's MCP tools on machines
-where an admin policy allows MCP servers only from approved plugins. T3 Code does not change; an
-optional transport (below) is the only server addition.
+where an admin policy allows MCP servers only from approved plugins. The wrappers use T3 Code's
+existing loopback HTTP endpoint.
 
 ## Pieces
 
@@ -73,14 +73,18 @@ settings copy what T3 Code sends each thread today, in `codexThreadRuntimeParams
    Each wrapper puts its own directory first on the CLI's `PATH`, so the CLI finds it when the
    plugin runs `<binary> mcp-bridge`.
 
-2. Install the plugin from `native/t3-mcp-plugin/plugin`:
+2. From the T3 Code checkout, add the local marketplace and install the plugin:
 
    ```sh
-   codex plugin marketplace add <path-or-git-url>
+   codex plugin marketplace add "$PWD/native/t3-mcp-plugin/plugin"
    codex plugin add t3-code@t3
-   claude plugin marketplace add <path-or-git-url>
+   claude plugin marketplace add "$PWD/native/t3-mcp-plugin/plugin"
    claude plugin install t3-code@t3
    ```
+
+   If your administrator provides an approved Git marketplace, use its URL in both
+   `marketplace add` commands. The Git repository must have the contents of
+   `native/t3-mcp-plugin/plugin` at its root.
 
 3. In T3 Code, set **Settings → Providers → Codex → Binary path** to `t3-codex` and
    **Settings → Providers → Claude → Binary path** to `t3-claude`. Each finds the real CLI on
@@ -89,14 +93,6 @@ settings copy what T3 Code sends each thread today, in `codexThreadRuntimeParams
 4. Deploy the policies: Codex's as `/etc/codex/requirements.toml`, Claude Code's as
    `/etc/claude-code/managed-settings.json` (Linux) or the macOS managed settings location. Set
    `strictKnownMarketplaces` to the approved source of this plugin.
-
-## Transport: TCP or Unix socket
-
-By default the wrappers reach T3 Code's `/mcp` over loopback TCP, at the URL T3 Code gave. For
-machines where MCP over loopback TCP is not allowed, start T3 Code with `T3CODE_MCP_SOCKET=<path>`.
-T3 Code then also serves `/mcp`, and nothing else, on that Unix socket (mode 0600; put it in an
-owner-only directory such as `$XDG_RUNTIME_DIR`). The wrappers inherit the variable and use the
-socket. See `apps/server/src/mcp/mcpUnixSocket.ts`.
 
 ## Credential handling
 
