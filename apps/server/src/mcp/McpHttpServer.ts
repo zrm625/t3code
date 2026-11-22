@@ -52,7 +52,10 @@ import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolExposure from "./McpToolExposure.ts";
-import { MCP_TOOL_EXPOSURE_HEADER } from "@t3tools/provider-core/server/mcpSession";
+import {
+  MCP_NATIVE_THREAD_HEADER,
+  MCP_TOOL_EXPOSURE_HEADER,
+} from "@t3tools/provider-core/server/mcpSession";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
@@ -273,35 +276,6 @@ const linkedEnvironmentsOff = HttpServerResponse.jsonUnsafe(
   { status: 403, headers: { "cache-control": "no-store" } },
 );
 
-// Codex's plugin bridge serves every thread of one app-server and names the caller in `_meta`.
-const decodeBridgeMessage = Schema.decodeUnknownOption(
-  Schema.Struct({
-    method: Schema.optional(Schema.String),
-    params: Schema.optional(
-      Schema.Struct({
-        _meta: Schema.optional(Schema.Struct({ threadId: Schema.optional(Schema.String) })),
-      }),
-    ),
-  }),
-);
-
-const readBridgeRequest = (
-  request: HttpServerRequest.HttpServerRequest,
-): Effect.Effect<McpSessionRegistry.McpBridgeRequestContext> =>
-  request.json.pipe(
-    Effect.map(decodeBridgeMessage),
-    Effect.map(
-      Option.match({
-        onNone: () => ({}),
-        onSome: (message) => ({
-          method: message.method,
-          nativeThreadId: message.params?._meta?.threadId,
-        }),
-      }),
-    ),
-    Effect.orElseSucceed(() => ({})),
-  );
-
 const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
@@ -335,7 +309,10 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     const authorization = request.headers.authorization;
     const token = parseBearerToken(request) ?? "";
     const invocation =
-      (yield* registry.resolve(token, readBridgeRequest(request))) ??
+      (yield* registry.resolve(token, {
+        method: request.headers["mcp-method"],
+        nativeThreadId: request.headers[MCP_NATIVE_THREAD_HEADER],
+      })) ??
       (Option.isSome(clients) && token.length > 0
         ? yield* clients.value.authenticate(request)
         : undefined);

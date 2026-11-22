@@ -31,7 +31,7 @@ export interface McpIssuedCredential {
 export interface McpBridgeRequest {
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
-  /** Maps the calling native thread to the T3 thread whose credential the call uses. */
+  /** Maps the calling provider thread to the T3 thread whose credential the call uses. */
   readonly resolveThreadId: (nativeThreadId: string) => Effect.Effect<ThreadId | undefined>;
 }
 
@@ -40,6 +40,7 @@ export interface McpIssuedBridge {
   readonly authorizationHeader: string;
 }
 
+/** Read from the request's `mcp-method` and `t3-native-thread-id` headers. */
 export interface McpBridgeRequestContext {
   readonly method?: string | undefined;
   readonly nativeThreadId?: string | undefined;
@@ -51,10 +52,9 @@ export interface McpSessionRegistryShape {
   readonly issueBridge: (
     request: McpBridgeRequest,
   ) => Effect.Effect<McpIssuedBridge, never, Scope.Scope>;
-  /** `readBridgeRequest` runs only for bridge tokens. */
   readonly resolve: (
     rawToken: string,
-    readBridgeRequest?: Effect.Effect<McpBridgeRequestContext>,
+    bridgeRequest?: McpBridgeRequestContext,
   ) => Effect.Effect<McpInvocationContext.McpThreadInvocationScope | undefined>;
   readonly touch: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
@@ -80,8 +80,10 @@ interface CredentialRecord {
   readonly expired: boolean;
 }
 
-interface BridgeRecord extends McpBridgeRequest {
-  readonly issuedAt: number;
+interface BridgeRecord {
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly resolveThreadId: McpBridgeRequest["resolveThreadId"];
+  readonly discoveryScope: McpInvocationContext.McpThreadInvocationScope;
 }
 
 interface RegistryState {
@@ -110,6 +112,17 @@ const tokenFromBytes = (bytes: Uint8Array): string => Buffer.from(bytes).toStrin
 // and wall time that passes while the host sleeps still counts.
 const idleMs = (since: AliveMark, now: AliveMark): number =>
   Math.max(now.wallMs - since.wallMs, now.monotonicMs - since.monotonicMs);
+
+// Codex lists tools once per thread without naming it, so a bridge lists every tool as a
+// stand-in thread; each call then runs as the thread it names.
+const BRIDGE_DISCOVERY_CAPABILITIES: ReadonlySet<McpInvocationContext.McpCapability> = new Set([
+  "orchestration",
+  "worktree",
+  "pull-requests",
+  "issues",
+  "preview",
+  "device",
+]);
 
 const getHttpMcpEndpointHost = (address: NetAddress.IpAddress): string =>
   NetAddress.isUnspecified(address)
@@ -196,12 +209,21 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 
   const issueBridge: McpSessionRegistryShape["issueBridge"] = Effect.fn(
     "McpSessionRegistry.issueBridge",
-  )(function* (request) {
-    const issuedAt = (yield* currentAliveMark).wallMs;
+  )(function* ({ providerSessionId, providerInstanceId, resolveThreadId }) {
     const rawToken = yield* random.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
     const tokenHash = yield* hashToken(rawToken);
+    const discoveryScope: McpInvocationContext.McpThreadInvocationScope = {
+      environmentId,
+      requestNamespace: providerSessionId,
+      thread: { threadId: ThreadId.make(providerSessionId), providerSessionId, providerInstanceId },
+      client: undefined,
+      capabilities: BRIDGE_DISCOVERY_CAPABILITIES,
+      issuedAt: (yield* currentAliveMark).wallMs,
+    };
     yield* Effect.acquireRelease(
-      Effect.sync(() => bridges.set(tokenHash, { ...request, issuedAt })),
+      Effect.sync(() =>
+        bridges.set(tokenHash, { providerInstanceId, resolveThreadId, discoveryScope }),
+      ),
       () => Effect.sync(() => bridges.delete(tokenHash)),
     );
     return { endpoint, authorizationHeader: `Bearer ${rawToken}` };
@@ -226,51 +248,29 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 
   const resolveBridge = Effect.fnUntraced(function* (
     bridge: BridgeRecord,
-    readBridgeRequest: Effect.Effect<McpBridgeRequestContext> | undefined,
+    { method, nativeThreadId }: McpBridgeRequestContext = {},
   ) {
-    const { method, nativeThreadId } = readBridgeRequest ? yield* readBridgeRequest : {};
-    const threadId = nativeThreadId ? yield* bridge.resolveThreadId(nativeThreadId) : undefined;
-    const record =
-      threadId === undefined
-        ? undefined
-        : Array.from((yield* SynchronizedRef.get(state)).records.values()).find(
-            (candidate) =>
-              !candidate.expired &&
-              candidate.scope.thread.threadId === threadId &&
-              candidate.scope.thread.providerInstanceId === bridge.providerInstanceId,
-          );
-    if (record !== undefined) return yield* resolveRecord(record.tokenHash);
-    // Codex lists tools before any thread calls one; a call still needs a live thread.
-    if (method === "tools/call") return undefined;
-    return {
-      environmentId,
-      requestNamespace: bridge.providerSessionId,
-      thread: {
-        threadId: ThreadId.make(bridge.providerSessionId),
-        providerSessionId: bridge.providerSessionId,
-        providerInstanceId: bridge.providerInstanceId,
-      },
-      client: undefined,
-      capabilities: new Set<McpInvocationContext.McpCapability>([
-        "orchestration",
-        "worktree",
-        "pull-requests",
-        "issues",
-        "preview",
-        "device",
-      ]),
-      issuedAt: bridge.issuedAt,
-    } satisfies McpInvocationContext.McpThreadInvocationScope;
+    if (nativeThreadId === undefined) {
+      return method === "tools/call" ? undefined : bridge.discoveryScope;
+    }
+    const threadId = yield* bridge.resolveThreadId(nativeThreadId);
+    const record = Array.from((yield* SynchronizedRef.get(state)).records.values()).find(
+      ({ expired, scope }) =>
+        !expired &&
+        scope.thread.threadId === threadId &&
+        scope.thread.providerInstanceId === bridge.providerInstanceId,
+    );
+    return record === undefined ? undefined : yield* resolveRecord(record.tokenHash);
   });
 
   const resolve: McpSessionRegistryShape["resolve"] = Effect.fn("McpSessionRegistry.resolve")(
-    function* (rawToken, readBridgeRequest) {
+    function* (rawToken, bridgeRequest) {
       if (rawToken.length === 0) return undefined;
       const tokenHash = yield* hashToken(rawToken);
       const bridge = bridges.get(tokenHash);
       return bridge === undefined
         ? yield* resolveRecord(tokenHash)
-        : yield* resolveBridge(bridge, readBridgeRequest);
+        : yield* resolveBridge(bridge, bridgeRequest);
     },
   );
 

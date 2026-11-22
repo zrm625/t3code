@@ -1,34 +1,21 @@
 // @effect-diagnostics nodeBuiltinImport:off - Reads the plugin manifests checked in beside the server.
 import * as NodeFS from "node:fs";
-import { NodeHttpServer } from "@effect/platform-node";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
-import { HttpBody, HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/http";
-import * as NetAddress from "effect/net/NetAddress";
 
-import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import { claudeMcpQueryOverrides } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { codexThreadRuntimeParams } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
-import * as McpHttpServer from "./McpHttpServer.ts";
-import * as McpInvocationContext from "./McpInvocationContext.ts";
-import * as McpSessionRegistry from "./McpSessionRegistry.ts";
-import * as McpToolAccess from "./McpToolAccess.ts";
 import {
   CLAUDE_PLUGIN_T3_MCP_TOOL_PREFIX,
   T3_MCP_AUTHORIZATION_ENV,
   T3_MCP_ENDPOINT_ENV,
   T3_MCP_PLUGIN_MODE_ENV,
   isClaudeMcpPluginEnabled,
+  withMcpPluginEnvironment,
 } from "./mcpPlugin.ts";
 
 const pluginRoot = new URL("../../../../packaging/mcp-plugin/plugin/", import.meta.url);
@@ -109,92 +96,25 @@ describe("T3 Code MCP plugin", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("routes a Codex bridge call to the thread its `_meta.threadId` names", () =>
+  it.effect("passes only this thread's credential to the plugin, with this install's `t3`", () =>
     Effect.gen(function* () {
-      const WhoAmI = Tool.make("who_am_i", { success: Schema.Struct({ threadId: Schema.String }) });
-      const WhoAmIToolkit = Toolkit.make(WhoAmI);
-      const registry = yield* McpSessionRegistry.__testing.make({ livenessWindowMs: 60_000 }).pipe(
-        Effect.provideService(
-          HttpServer.HttpServer,
-          HttpServer.HttpServer.of({
-            address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43123),
-            serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
-          }),
-        ),
-        Effect.provideService(
-          ServerEnvironment.ServerEnvironment,
-          ServerEnvironment.ServerEnvironment.of({
-            getEnvironmentId: Effect.succeed(EnvironmentId.make("env-plugin-test")),
-            getDescriptor: Effect.die("unused"),
-          }),
-        ),
-        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-      );
-      const codex = ProviderInstanceId.make("codex");
-      const threadA = ThreadId.make("thread-a");
-      const nativeThreads = new Map<string, ThreadId>();
-      const bridge = yield* registry.issueBridge({
-        providerSessionId: "codex-session",
-        providerInstanceId: codex,
-        resolveThreadId: (nativeThreadId) => Effect.succeed(nativeThreads.get(nativeThreadId)),
+      const path = yield* Path.Path;
+      const outer = {
+        PATH: "/usr/bin",
+        T3CODE_CLI_PATH: "/opt/t3/bin/t3",
+        [T3_MCP_ENDPOINT_ENV]: "http://127.0.0.1:1/mcp",
+        [T3_MCP_AUTHORIZATION_ENV]: "Bearer outer-thread",
+      };
+      expect(withMcpPluginEnvironment(outer, undefined, path, "linux")).toEqual({
+        PATH: "/usr/bin",
+        T3CODE_CLI_PATH: "/opt/t3/bin/t3",
       });
-      yield* HttpRouter.serve(
-        McpHttpServer.layerMcpTransport(
-          McpHttpServer.toolkitRegistration(
-            WhoAmIToolkit,
-            McpToolAccess.toLayer(WhoAmIToolkit, {
-              who_am_i: McpToolAccess.reads(() =>
-                Effect.serviceOption(McpInvocationContext.McpInvocationContext).pipe(
-                  Effect.map((scope) => ({
-                    threadId: Option.getOrUndefined(scope)?.thread?.threadId ?? "none",
-                  })),
-                ),
-              ),
-            }),
-          ),
-        ).pipe(
-          Layer.provide(ServerSettings.layerTest()),
-          Layer.provide(Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry)),
-        ),
-        { disableListenLog: true, disableLogger: true },
-      ).pipe(Layer.build);
-      const httpClient = (yield* HttpClient.HttpClient).pipe(
-        HttpClient.mapRequest(HttpClientRequest.bearerToken(bridge.authorizationHeader.slice(7))),
-      );
-      const post = (message: object, headers: Record<string, string> = {}) =>
-        httpClient.post("/mcp", {
-          headers: { accept: "application/json, text/event-stream", ...headers },
-          body: HttpBody.text(JSON.stringify({ jsonrpc: "2.0", ...message }), "application/json"),
-        });
-      const callWhoAmI = (sessionId: string) =>
-        post(
-          {
-            id: 2,
-            method: "tools/call",
-            params: { name: "who_am_i", arguments: {}, _meta: { threadId: "native-a" } },
-          },
-          { "mcp-session-id": sessionId, "mcp-protocol-version": "2025-06-18" },
-        );
-
-      // Codex initializes before any of its threads has a live credential.
-      const initialize = yield* post({
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-06-18",
-          capabilities: {},
-          clientInfo: { name: "codex", version: "0.171.0" },
-        },
+      expect(withMcpPluginEnvironment(outer, mcpSession, path, "linux")).toEqual({
+        PATH: "/opt/t3/bin:/usr/bin",
+        T3CODE_CLI_PATH: "/opt/t3/bin/t3",
+        [T3_MCP_ENDPOINT_ENV]: mcpSession.endpoint,
+        [T3_MCP_AUTHORIZATION_ENV]: "Bearer token",
       });
-      expect(initialize.status).toBe(200);
-      const sessionId = initialize.headers["mcp-session-id"]!;
-      expect((yield* callWhoAmI(sessionId)).status).toBe(401);
-
-      yield* registry.issue({ threadId: threadA, providerInstanceId: codex });
-      nativeThreads.set("native-a", threadA);
-      const mapped = yield* callWhoAmI(sessionId);
-      expect(mapped.status).toBe(200);
-      expect(yield* mapped.text).toContain("thread-a");
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

@@ -160,15 +160,22 @@ describe("AcpMcpStdioBridge", () => {
 
       input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`);
       input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+      input.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "who", _meta: { threadId: "native-1" } } })}\n`,
+      );
       input.end();
       yield* Fiber.join(fiber);
 
-      expect(written).toHaveLength(2);
+      expect(written).toHaveLength(3);
       expect(JSON.parse(written[0]!)).toMatchObject({ id: 1 });
       expect(JSON.parse(written[1]!)).toMatchObject({ id: 2, result: { ok: true } });
       expect(requests[0]?.headers.get("authorization")).toBe("Bearer bridge-test");
       expect(requests[1]?.headers.get("mcp-session-id")).toBe("session-42");
       expect(requests[1]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
+      expect(requests[1]?.headers.get("mcp-method")).toBe("tools/list");
+      expect(requests[1]?.headers.has("t3-native-thread-id")).toBe(false);
+      expect(requests[2]?.headers.get("mcp-name")).toBe("who");
+      expect(requests[2]?.headers.get("t3-native-thread-id")).toBe("native-1");
     }),
   );
 

@@ -261,3 +261,36 @@ it.effect.each(["provider-session", "thread", "all"] as const)(
       expect(yield* registry.resolve(token)).toBeUndefined();
     }),
 );
+
+it.effect("runs a Codex bridge call as the live thread it names, until the bridge closes", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const codex = ProviderInstanceId.make("codex");
+    const threadId = ThreadId.make("thread-1");
+    const call = { method: "tools/call", nativeThreadId: "native-1" };
+    const token = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const bridge = yield* registry.issueBridge({
+          providerSessionId: "codex-session",
+          providerInstanceId: codex,
+          resolveThreadId: (nativeThreadId) =>
+            Effect.succeed(nativeThreadId === "native-1" ? threadId : undefined),
+        });
+        const token = bridge.authorizationHeader.slice("Bearer ".length);
+
+        // Codex lists tools without naming a thread; a call must name a live one.
+        const listed = yield* registry.resolve(token, { method: "tools/list" });
+        expect(listed?.capabilities.has("device")).toBe(true);
+        expect(yield* registry.resolve(token, { method: "tools/call" })).toBeUndefined();
+        expect(yield* registry.resolve(token, call)).toBeUndefined();
+        yield* registry.issue({ threadId, providerInstanceId: codex });
+        expect((yield* registry.resolve(token, call))?.thread.threadId).toBe(threadId);
+        expect(
+          yield* registry.resolve(token, { ...call, nativeThreadId: "native-2" }),
+        ).toBeUndefined();
+        return token;
+      }),
+    );
+    expect(yield* registry.resolve(token, { method: "tools/list" })).toBeUndefined();
+  }),
+);

@@ -7,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { MCP_NATIVE_THREAD_HEADER } from "@t3tools/provider-core/server/mcpSession";
 import { discardResponseBody, responsePayloads } from "@t3tools/shared/mcpResponsePayloads";
 
 /** ACP mandates stdio MCP support; HTTP/SSE support varies. */
@@ -36,6 +37,30 @@ interface JsonRpcEnvelope {
 }
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
+
+const decodeRequestRouting = Schema.decodeUnknownOption(
+  Schema.Struct({
+    method: Schema.String,
+    params: Schema.optional(
+      Schema.Struct({
+        name: Schema.optional(Schema.String),
+        _meta: Schema.optional(Schema.Struct({ threadId: Schema.optional(Schema.String) })),
+      }),
+    ),
+  }),
+);
+
+/** MCP's routing headers, plus the calling provider thread, so `/mcp` never reads the body. */
+function routingHeaders(message: unknown): Record<string, string> {
+  return Option.match(decodeRequestRouting(message), {
+    onNone: () => ({}),
+    onSome: ({ method, params }) => ({
+      "mcp-method": method,
+      ...(method === "tools/call" && params?.name ? { "mcp-name": params.name } : {}),
+      ...(params?._meta?.threadId ? { [MCP_NATIVE_THREAD_HEADER]: params._meta.threadId } : {}),
+    }),
+  });
+}
 
 export interface AcpMcpStdioBridgeOptions {
   readonly endpoint: string;
@@ -238,6 +263,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
                 authorization: options.authorization,
                 ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
                 ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
+                ...routingHeaders(envelope),
               },
               body: line,
               signal,
@@ -350,34 +376,31 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function offlineReply(id: unknown, method: unknown, params: unknown): unknown {
-  switch (method) {
-    case "initialize": {
-      const requested =
-        typeof params === "object" && params !== null
-          ? Reflect.get(params, "protocolVersion")
-          : undefined;
-      return {
-        jsonrpc: "2.0",
-        id,
-        result: {
-          protocolVersion: typeof requested === "string" ? requested : MCP_PROTOCOL_VERSION,
-          capabilities: { tools: {} },
-          serverInfo: { name: "t3-code", version: "offline" },
-        },
-      };
-    }
-    case "tools/list":
-      return { jsonrpc: "2.0", id, result: { tools: [] } };
-    case "ping":
-      return { jsonrpc: "2.0", id, result: {} };
-    default:
-      return {
-        jsonrpc: "2.0",
-        id,
-        error: { code: -32601, message: "T3 Code did not start this session." },
-      };
+const OfflineRequest = Schema.Struct({
+  id: Schema.Union([Schema.String, Schema.Number]),
+  method: Schema.String,
+  params: Schema.optional(Schema.Struct({ protocolVersion: Schema.optional(Schema.String) })),
+});
+const decodeOfflineRequest = Schema.decodeUnknownResult(Schema.fromJsonString(OfflineRequest));
+
+function offlineReply({ id, method, params }: typeof OfflineRequest.Type) {
+  if (method === "initialize") {
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: params?.protocolVersion ?? MCP_PROTOCOL_VERSION,
+        capabilities: { tools: {} },
+        serverInfo: { name: "t3-code", version: "offline" },
+      },
+    };
   }
+  if (method === "tools/list") return { jsonrpc: "2.0", id, result: { tools: [] } };
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32601, message: "T3 Code did not start this session." },
+  };
 }
 
 /** A CLI that runs the plugin outside T3 Code sees a server with no tools instead of a failure. */
@@ -389,12 +412,10 @@ export function runOfflineMcpStdioBridge(options: {
     Stream.map((chunk) => (typeof chunk === "string" ? Buffer.from(chunk) : chunk)),
     Stream.decodeText(),
     Stream.splitLines,
-    Stream.runForEach((line) => {
-      const message = asEnvelope(Option.getOrUndefined(decodeJsonLine(line)));
-      if (message?.id === undefined || typeof message.method !== "string") return Effect.void;
-      const reply = offlineReply(message.id, message.method, Reflect.get(message, "params"));
-      return Effect.sync(() => options.output.write(`${JSON.stringify(reply)}\n`));
-    }),
+    Stream.filterMap((line) => decodeOfflineRequest(line)),
+    Stream.runForEach((request) =>
+      Effect.sync(() => options.output.write(`${JSON.stringify(offlineReply(request))}\n`)),
+    ),
     Effect.ignoreCause,
   );
 }

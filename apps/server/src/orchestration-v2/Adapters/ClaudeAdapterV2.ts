@@ -230,6 +230,7 @@ import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
   CLAUDE_PLUGIN_T3_MCP_TOOL_PREFIX,
+  T3_MCP_AUTHORIZATION_ENV,
   isClaudeMcpPluginEnabled,
   withMcpPluginEnvironment,
 } from "../../mcp/mcpPlugin.ts";
@@ -2322,8 +2323,6 @@ export function makeClaudeQueryOptions(input: {
   readonly sdkSettings?: string | ClaudeSdkSettings;
   readonly environment?: NodeJS.ProcessEnv;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
-  /** Defaults to whether `mcpServers` is set; the installed plugin serves T3's tools without it. */
-  readonly hasT3Mcp?: boolean;
   /** The thread's T3 MCP session holds the `device` capability. */
   readonly deviceToolsAvailable?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
@@ -2428,7 +2427,9 @@ export function makeClaudeQueryOptions(input: {
               : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
           },
         } as ClaudeSdkSettings);
-  const hasT3Mcp = input.hasT3Mcp ?? input.mcpServers !== undefined;
+  // The installed plugin serves T3's tools from the credential in the environment.
+  const hasT3Mcp =
+    input.mcpServers !== undefined || input.environment?.[T3_MCP_AUTHORIZATION_ENV] !== undefined;
   const deviceInstructions = hasT3Mcp && input.deviceToolsAvailable === true;
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
@@ -2644,7 +2645,7 @@ export function claudeMcpQueryOverrides(input: {
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
-  /** The credential the plugin's bridge reads from the Claude process environment. */
+  /** The thread credential the plugin's bridge reads from the Claude environment. */
   readonly pluginMcp?: { readonly endpoint: string; readonly authorizationHeader: string };
 } {
   const session = input.mcpSession;
@@ -13324,18 +13325,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
-          const baseEnvironment = claudeQueryEnvironment(
-            adapterOptions.environment,
-            turnInput.appThread,
-            turnInput.appThread.lineage.relationshipToParent === "subagent"
-              ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
-              : undefined,
-            shouldResume,
+          const queryEnvironment = withMcpPluginEnvironment(
+            claudeQueryEnvironment(
+              adapterOptions.environment,
+              turnInput.appThread,
+              turnInput.appThread.lineage.relationshipToParent === "subagent"
+                ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
+                : undefined,
+              shouldResume,
+            ),
+            mcpOverrides.pluginMcp,
+            path,
+            hostPlatform,
           );
-          const queryEnvironment =
-            mcpOverrides.pluginMcp === undefined
-              ? baseEnvironment
-              : withMcpPluginEnvironment(baseEnvironment, mcpOverrides.pluginMcp, path);
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             modelCatalog: catalog,
@@ -13363,7 +13365,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(mcpOverrides.mcpServers === undefined
               ? {}
               : { mcpServers: mcpOverrides.mcpServers }),
-            hasT3Mcp: mcpSession !== undefined,
             deviceToolsAvailable: mcpSession?.capabilities?.has("device") === true,
             permissionMode: queryPolicy.permissionMode,
             ...(queryPolicy.allowDangerouslySkipPermissions === undefined

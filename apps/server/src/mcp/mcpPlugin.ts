@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
+import { mergePathValues } from "@t3tools/shared/shell";
 
 export const T3_MCP_PLUGIN_ID = "t3-code@t3";
 export const T3_MCP_ENDPOINT_ENV = "T3_MCP_ENDPOINT";
@@ -44,23 +45,30 @@ export const isClaudeMcpPluginEnabled = Effect.fn("mcpPlugin.isClaudeMcpPluginEn
 });
 
 /**
- * The plugin's `t3 mcp-bridge` reads the credential from the provider's environment. The `t3`
- * shim directory goes first on `PATH` so the plugin's bare `t3` command resolves.
+ * The plugin's `t3 mcp-bridge` reads its credential from the provider's environment, so one
+ * inherited from an outer T3 session never passes through. This install's `t3` goes first on
+ * `PATH`, so the plugin's bare `t3` runs it.
  */
 export function withMcpPluginEnvironment(
-  base: NodeJS.ProcessEnv,
-  credential: { readonly endpoint: string; readonly authorizationHeader: string },
+  environment: NodeJS.ProcessEnv,
+  credential: { readonly endpoint: string; readonly authorizationHeader: string } | undefined,
   path: Path.Path,
+  platform: NodeJS.Platform,
 ): NodeJS.ProcessEnv {
-  const cliPath = base.T3CODE_CLI_PATH?.trim();
-  const pathKey = Object.keys(base).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
-  const delimiter = path.sep === "\\" ? ";" : ":";
+  const {
+    [T3_MCP_ENDPOINT_ENV]: _endpoint,
+    [T3_MCP_AUTHORIZATION_ENV]: _authorization,
+    ...rest
+  } = environment;
+  if (credential === undefined) return rest;
+  const cliPath = rest.T3CODE_CLI_PATH?.trim();
+  const pathKey = Object.keys(rest).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
   return {
-    ...base,
+    ...rest,
+    ...(cliPath
+      ? { [pathKey]: mergePathValues(path.dirname(cliPath), rest[pathKey], platform) }
+      : {}),
     [T3_MCP_ENDPOINT_ENV]: credential.endpoint,
     [T3_MCP_AUTHORIZATION_ENV]: credential.authorizationHeader,
-    ...(cliPath
-      ? { [pathKey]: [path.dirname(cliPath), base[pathKey]].filter(Boolean).join(delimiter) }
-      : {}),
   };
 }

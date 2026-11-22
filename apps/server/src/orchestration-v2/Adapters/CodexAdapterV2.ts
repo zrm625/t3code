@@ -2029,6 +2029,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const mcpSessionRegistry = yield* Effect.serviceOption(McpSessionRegistry.McpSessionRegistry);
   const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
   const readMcpSession = (threadId: ThreadId | null) =>
     threadId === null ? Effect.undefined : mcpSessions.read(threadId);
   const { clientFactory, digest, fileSystem, idAllocator, serverConfig } = adapterOptions;
@@ -2060,22 +2061,25 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+        const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
+        const subagentThreads = yield* Ref.make(new Map<string, CodexSubagentThreadContext>());
+        // A subagent's tool calls act as its root thread, as its approvals do.
+        const appThreadOf = Effect.fnUntraced(function* (nativeThreadId: string) {
+          const subagent = (yield* Ref.get(subagentThreads)).get(nativeThreadId);
+          return subagent === undefined
+            ? (rootProviderThreads.get(nativeThreadId)?.appThreadId ?? undefined)
+            : approvalOwnerCodexTurn(subagent.parentContext).owner.input.threadId;
+        });
         const environment = resolvedRuntime?.environment ?? adapterOptions.environment;
         const pluginModeOverride = mcpPluginModeOverride(environment);
-        // Codex reports enabled plugins only once it runs, so every app-server gets the credential.
+        // Codex reports its plugins only once it runs, so every app-server gets the credential.
         const pluginBridge =
           Option.isNone(mcpSessionRegistry) || pluginModeOverride === false
             ? undefined
             : yield* mcpSessionRegistry.value.issueBridge({
                 providerSessionId: input.providerSessionId,
                 providerInstanceId: adapterOptions.instanceId,
-                // Subagents act as their parent thread.
-                resolveThreadId: Effect.fnUntraced(function* (nativeThreadId) {
-                  const subagent = (yield* Ref.get(subagentThreads)).get(nativeThreadId);
-                  return subagent === undefined
-                    ? (rootProviderThreads.get(nativeThreadId)?.appThreadId ?? undefined)
-                    : approvalOwnerCodexTurn(subagent.parentContext).owner.input.threadId;
-                }),
+                resolveThreadId: appThreadOf,
               });
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
@@ -2083,10 +2087,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment:
-            pluginBridge === undefined
-              ? environment
-              : withMcpPluginEnvironment(environment, pluginBridge, path),
+          environment: withMcpPluginEnvironment(environment, pluginBridge, path, platform),
         });
         const codexZone = codexTimeZone(resolvedRuntime?.environment ?? adapterOptions.environment);
         const additionalContextByThread = yield* Ref.make(
@@ -2303,7 +2304,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, ProviderAdapter.ProviderAdapterV2TurnInput>(),
         );
         const turnWaiters = yield* Ref.make(new Map<string, Deferred.Deferred<void, never>>());
-        const subagentThreads = yield* Ref.make(new Map<string, CodexSubagentThreadContext>());
         const subagentSelections = new Map<string, Omit<ModelSelection, "instanceId">>();
         // A reroute names one turn; until new settings arrive, the thread's model is unknown.
         const reroutedTurnModels = new Map<string, string>();
@@ -2432,7 +2432,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // Serialize native completion and interrupt timeout so only one publishes terminal events.
         const turnTerminalizationPermit = yield* Semaphore.make(1);
         const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
-        const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
         const goalHolds = new Map<string, CodexGoalHold>();
         const continuedRuns = new Map<ProviderTurnId, Array<ActiveCodexTurnContext>>();
         const capacityContinuations = new Map<
