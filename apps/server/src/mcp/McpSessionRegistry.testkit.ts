@@ -19,6 +19,11 @@ export const layer = Layer.succeed(
           browserToolsAvailable: true,
         },
       }),
+    issueBridge: ({ providerSessionId }) =>
+      Effect.succeed({
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: `Bearer mcp-bridge-test:${providerSessionId}`,
+      }),
     resolve: () => Effect.undefined,
     touch: () => Effect.void,
     revokeProviderSession: () => Effect.void,

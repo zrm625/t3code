@@ -5,6 +5,7 @@ import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
@@ -26,10 +27,34 @@ export interface McpIssuedCredential {
   readonly config: McpProviderSession.McpProviderSessionConfig;
 }
 
+/** One credential for every thread of a Codex app-server, which runs T3's plugin bridge. */
+export interface McpBridgeRequest {
+  readonly providerSessionId: string;
+  readonly providerInstanceId: ProviderInstanceId;
+  /** Maps the calling native thread to the T3 thread whose credential the call uses. */
+  readonly resolveThreadId: (nativeThreadId: string) => Effect.Effect<ThreadId | undefined>;
+}
+
+export interface McpIssuedBridge {
+  readonly endpoint: string;
+  readonly authorizationHeader: string;
+}
+
+export interface McpBridgeRequestContext {
+  readonly method?: string | undefined;
+  readonly nativeThreadId?: string | undefined;
+}
+
 export interface McpSessionRegistryShape {
   readonly issue: (request: McpCredentialRequest) => Effect.Effect<McpIssuedCredential>;
+  /** Revoked when the scope closes. */
+  readonly issueBridge: (
+    request: McpBridgeRequest,
+  ) => Effect.Effect<McpIssuedBridge, never, Scope.Scope>;
+  /** `readBridgeRequest` runs only for bridge tokens. */
   readonly resolve: (
     rawToken: string,
+    readBridgeRequest?: Effect.Effect<McpBridgeRequestContext>,
   ) => Effect.Effect<McpInvocationContext.McpThreadInvocationScope | undefined>;
   readonly touch: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
@@ -53,6 +78,10 @@ interface CredentialRecord {
   readonly lastAlive: AliveMark;
   /** Set when a request finds the token idle; only `touch` clears it, whatever the clocks do. */
   readonly expired: boolean;
+}
+
+interface BridgeRecord extends McpBridgeRequest {
+  readonly issuedAt: number;
 }
 
 interface RegistryState {
@@ -96,6 +125,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
+  const bridges = new Map<string, BridgeRecord>();
   const { now } = options;
   const currentAliveMark: Effect.Effect<AliveMark> = now
     ? Effect.sync(() => {
@@ -164,23 +194,83 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     },
   );
 
+  const issueBridge: McpSessionRegistryShape["issueBridge"] = Effect.fn(
+    "McpSessionRegistry.issueBridge",
+  )(function* (request) {
+    const issuedAt = (yield* currentAliveMark).wallMs;
+    const rawToken = yield* random.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
+    const tokenHash = yield* hashToken(rawToken);
+    yield* Effect.acquireRelease(
+      Effect.sync(() => bridges.set(tokenHash, { ...request, issuedAt })),
+      () => Effect.sync(() => bridges.delete(tokenHash)),
+    );
+    return { endpoint, authorizationHeader: `Bearer ${rawToken}` };
+  });
+
+  // Both run inside the traced `resolve`.
+  const resolveRecord = Effect.fnUntraced(function* (tokenHash: string) {
+    const alive = yield* currentAliveMark;
+    return yield* SynchronizedRef.modify(state, ({ records }) => {
+      const record = records.get(tokenHash);
+      if (!record || record.expired) return [undefined, { records }] as const;
+      if (idleMs(record.lastAlive, alive) > livenessWindowMs) {
+        const next = new Map(records);
+        next.set(tokenHash, { ...record, expired: true });
+        return [undefined, { records: next }] as const;
+      }
+      const next = new Map(records);
+      next.set(tokenHash, { ...record, lastAlive: alive });
+      return [record.scope, { records: next }] as const;
+    });
+  });
+
+  const resolveBridge = Effect.fnUntraced(function* (
+    bridge: BridgeRecord,
+    readBridgeRequest: Effect.Effect<McpBridgeRequestContext> | undefined,
+  ) {
+    const { method, nativeThreadId } = readBridgeRequest ? yield* readBridgeRequest : {};
+    const threadId = nativeThreadId ? yield* bridge.resolveThreadId(nativeThreadId) : undefined;
+    const record =
+      threadId === undefined
+        ? undefined
+        : Array.from((yield* SynchronizedRef.get(state)).records.values()).find(
+            (candidate) =>
+              !candidate.expired &&
+              candidate.scope.thread.threadId === threadId &&
+              candidate.scope.thread.providerInstanceId === bridge.providerInstanceId,
+          );
+    if (record !== undefined) return yield* resolveRecord(record.tokenHash);
+    // Codex lists tools before any thread calls one; a call still needs a live thread.
+    if (method === "tools/call") return undefined;
+    return {
+      environmentId,
+      requestNamespace: bridge.providerSessionId,
+      thread: {
+        threadId: ThreadId.make(bridge.providerSessionId),
+        providerSessionId: bridge.providerSessionId,
+        providerInstanceId: bridge.providerInstanceId,
+      },
+      client: undefined,
+      capabilities: new Set<McpInvocationContext.McpCapability>([
+        "orchestration",
+        "worktree",
+        "pull-requests",
+        "issues",
+        "preview",
+        "device",
+      ]),
+      issuedAt: bridge.issuedAt,
+    } satisfies McpInvocationContext.McpThreadInvocationScope;
+  });
+
   const resolve: McpSessionRegistryShape["resolve"] = Effect.fn("McpSessionRegistry.resolve")(
-    function* (rawToken) {
+    function* (rawToken, readBridgeRequest) {
       if (rawToken.length === 0) return undefined;
       const tokenHash = yield* hashToken(rawToken);
-      const alive = yield* currentAliveMark;
-      return yield* SynchronizedRef.modify(state, ({ records }) => {
-        const record = records.get(tokenHash);
-        if (!record || record.expired) return [undefined, { records }] as const;
-        if (idleMs(record.lastAlive, alive) > livenessWindowMs) {
-          const next = new Map(records);
-          next.set(tokenHash, { ...record, expired: true });
-          return [undefined, { records: next }] as const;
-        }
-        const next = new Map(records);
-        next.set(tokenHash, { ...record, lastAlive: alive });
-        return [record.scope, { records: next }] as const;
-      });
+      const bridge = bridges.get(tokenHash);
+      return bridge === undefined
+        ? yield* resolveRecord(tokenHash)
+        : yield* resolveBridge(bridge, readBridgeRequest);
     },
   );
 
@@ -206,6 +296,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 
   return McpSessionRegistry.of({
     issue,
+    issueBridge,
     resolve,
     touch,
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(
@@ -216,7 +307,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     revokeThread: Effect.fn("McpSessionRegistry.revokeThread")(function* (threadId) {
       yield* revokeWhere((record) => record.scope.thread.threadId === threadId);
     }),
-    revokeAll: SynchronizedRef.set(state, { records: new Map() }),
+    revokeAll: SynchronizedRef.set(state, { records: new Map() }).pipe(
+      Effect.tap(() => Effect.sync(() => bridges.clear())),
+    ),
   });
 });
 

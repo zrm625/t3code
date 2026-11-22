@@ -350,11 +350,71 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** Avoid heavy imports on the ACP first-message path. */
+function offlineReply(id: unknown, method: unknown, params: unknown): unknown {
+  switch (method) {
+    case "initialize": {
+      const requested =
+        typeof params === "object" && params !== null
+          ? Reflect.get(params, "protocolVersion")
+          : undefined;
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          protocolVersion: typeof requested === "string" ? requested : MCP_PROTOCOL_VERSION,
+          capabilities: { tools: {} },
+          serverInfo: { name: "t3-code", version: "offline" },
+        },
+      };
+    }
+    case "tools/list":
+      return { jsonrpc: "2.0", id, result: { tools: [] } };
+    case "ping":
+      return { jsonrpc: "2.0", id, result: {} };
+    default:
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: "T3 Code did not start this session." },
+      };
+  }
+}
+
+/** A CLI that runs the plugin outside T3 Code sees a server with no tools instead of a failure. */
+export function runOfflineMcpStdioBridge(options: {
+  readonly input: NodeJS.ReadableStream;
+  readonly output: { write(chunk: string): unknown };
+}): Effect.Effect<void> {
+  return Stream.fromAsyncIterable(options.input, bridgeError).pipe(
+    Stream.map((chunk) => (typeof chunk === "string" ? Buffer.from(chunk) : chunk)),
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.runForEach((line) => {
+      const message = asEnvelope(Option.getOrUndefined(decodeJsonLine(line)));
+      if (message?.id === undefined || typeof message.method !== "string") return Effect.void;
+      const reply = offlineReply(message.id, message.method, Reflect.get(message, "params"));
+      return Effect.sync(() => options.output.write(`${JSON.stringify(reply)}\n`));
+    }),
+    Effect.ignoreCause,
+  );
+}
+
+/** Avoid heavy imports on the ACP and plugin MCP bridge paths. */
 export async function runAcpMcpCliFastPath(
-  command: "acp-mcp-bridge" | "acp-mcp-call",
+  command: "mcp-bridge" | "acp-mcp-bridge" | "acp-mcp-call",
   args: ReadonlyArray<string>,
 ): Promise<void> {
+  if (command === "mcp-bridge") {
+    const endpoint = process.env.T3_MCP_ENDPOINT;
+    const authorization = process.env.T3_MCP_AUTHORIZATION;
+    const io = { input: process.stdin, output: process.stdout };
+    await Effect.runPromise(
+      endpoint && authorization
+        ? runAcpMcpStdioBridge({ endpoint, authorization, ...io })
+        : runOfflineMcpStdioBridge(io),
+    );
+    return;
+  }
   const endpoint = process.env.T3_ACP_MCP_ENDPOINT;
   const authorization = process.env.T3_ACP_MCP_AUTHORIZATION;
   if (endpoint === undefined || authorization === undefined) {

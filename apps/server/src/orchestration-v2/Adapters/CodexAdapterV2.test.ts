@@ -2690,9 +2690,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           cwd: "/workspace",
           model: "gpt-5.4",
           config: {
-            "tools.update_plan.enabled": true,
-            mcp_optional_startup_grace_ms: 10_000,
-            "features.concurrent_reasoning_summaries": true,
+            ...CodexAdapterV2.CODEX_THREAD_CONFIG,
             "shell_environment_policy.set.T3CODE_THREAD_ID": `thread-${scenario}`,
             "mcp_servers.envprobe.env.T3CODE_THREAD_ID": `thread-${scenario}`,
             "mcp_servers.t3-code": {

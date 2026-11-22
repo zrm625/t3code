@@ -7,7 +7,12 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { vi } from "vite-plus/test";
 
-import { mcpToolSession, runAcpMcpCliFastPath, runAcpMcpStdioBridge } from "./AcpMcpStdioBridge.ts";
+import {
+  mcpToolSession,
+  runAcpMcpCliFastPath,
+  runAcpMcpStdioBridge,
+  runOfflineMcpStdioBridge,
+} from "./AcpMcpStdioBridge.ts";
 
 function makeHarness(
   responder: (request: Request) => Promise<Response> | Response,
@@ -188,6 +193,32 @@ describe("AcpMcpStdioBridge", () => {
         id: 3,
         error: { code: -32603 },
       });
+    }),
+  );
+
+  it.effect("answers discovery with no tools when T3 Code did not start the plugin", () =>
+    Effect.gen(function* () {
+      const input = new NodeStream.PassThrough();
+      const written: Array<string> = [];
+      const fiber = yield* Effect.forkChild(
+        runOfflineMcpStdioBridge({ input, output: { write: (chunk) => written.push(chunk) } }),
+      );
+      for (const message of [
+        { id: 1, method: "initialize", params: { protocolVersion: "2026-07-28" } },
+        { id: 2, method: "tools/list" },
+        { method: "notifications/initialized" },
+        { id: 3, method: "tools/call" },
+      ]) {
+        input.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+      }
+      input.end();
+      yield* Fiber.join(fiber);
+
+      expect(written.map((line) => JSON.parse(line))).toMatchObject([
+        { id: 1, result: { protocolVersion: "2026-07-28" } },
+        { id: 2, result: { tools: [] } },
+        { id: 3, error: { code: -32601 } },
+      ]);
     }),
   );
 

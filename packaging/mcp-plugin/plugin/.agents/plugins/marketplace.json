@@ -1,0 +1,9 @@
+{
+  "name": "t3",
+  "plugins": [
+    {
+      "name": "t3-code",
+      "source": { "source": "local", "path": "./plugins/t3-code" }
+    }
+  ]
+}
