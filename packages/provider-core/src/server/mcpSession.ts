@@ -7,6 +7,9 @@ import type * as Effect from "effect/Effect";
  */
 export const MCP_TOOL_EXPOSURE_HEADER = "t3-tool-exposure";
 
+/** Set by `t3 mcp-bridge` from a request's `_meta.threadId`: the provider thread calling. */
+export const MCP_NATIVE_THREAD_HEADER = "t3-native-thread-id";
+
 export interface McpProviderSessionConfig {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;

@@ -228,6 +228,12 @@ import {
 } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import {
+  CLAUDE_PLUGIN_T3_MCP_TOOL_PREFIX,
+  T3_MCP_AUTHORIZATION_ENV,
+  isClaudeMcpPluginEnabled,
+  withMcpPluginEnvironment,
+} from "../../mcp/mcpPlugin.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import {
   makeProviderFailure,
@@ -2421,7 +2427,10 @@ export function makeClaudeQueryOptions(input: {
               : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
           },
         } as ClaudeSdkSettings);
-  const deviceInstructions = input.mcpServers !== undefined && input.deviceToolsAvailable === true;
+  // The installed plugin serves T3's tools from the credential in the environment.
+  const hasT3Mcp =
+    input.mcpServers !== undefined || input.environment?.[T3_MCP_AUTHORIZATION_ENV] !== undefined;
+  const deviceInstructions = hasT3Mcp && input.deviceToolsAvailable === true;
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
     // T3 names threads; a supplied title skips Claude's redundant naming request.
@@ -2479,7 +2488,7 @@ export function makeClaudeQueryOptions(input: {
           harness: "Claude Code",
           runtimePolicy: { cwd: input.cwd, workspace: input.workspace },
         }) +
-          (input.mcpServers === undefined
+          (!hasT3Mcp
             ? ""
             : T3_CODE_ORCHESTRATION_INSTRUCTIONS +
               CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS +
@@ -2630,20 +2639,32 @@ export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 export function claudeMcpQueryOverrides(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly readOnlySandbox: boolean;
+  /** The installed `t3-code@t3` plugin serves T3's tools, so the query must not. */
+  readonly usePluginMcp?: boolean;
   readonly allowedTools?: ReadonlyArray<string>;
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
+  /** The thread credential the plugin's bridge reads from the Claude environment. */
+  readonly pluginMcp?: { readonly endpoint: string; readonly authorizationHeader: string };
 } {
   const session = input.mcpSession;
   if (session === undefined) {
     return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
   }
+  const prefix = input.usePluginMcp === true ? CLAUDE_PLUGIN_T3_MCP_TOOL_PREFIX : "mcp__t3-code__";
   const mcpAllowedTools = input.readOnlySandbox
-    ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
-    : [CLAUDE_T3_MCP_TOOL_WILDCARD];
+    ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS.map((tool) => tool.replace("mcp__t3-code__", prefix))
+    : [`${prefix}*`];
+  const allowedTools = Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools]));
+  if (input.usePluginMcp === true) {
+    return {
+      allowedTools,
+      pluginMcp: { endpoint: session.endpoint, authorizationHeader: session.authorizationHeader },
+    };
+  }
   return {
-    allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
+    allowedTools,
     mcpServers: {
       "t3-code": {
         type: "http",
@@ -3709,6 +3730,7 @@ export function claudeEffectiveQueryPolicyKey(
   mcpOverrides: {
     readonly allowedTools?: ReadonlyArray<string>;
     readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
+    readonly pluginMcp?: { readonly endpoint: string; readonly authorizationHeader: string };
   },
   // Folders are fixed when a query starts, so a changed list needs a new one.
   workspace?: ProviderAdapter.ProviderAdapterV2RuntimePolicy["workspace"],
@@ -3722,6 +3744,7 @@ export function claudeEffectiveQueryPolicyKey(
         : { allowedTools: mcpOverrides.allowedTools }),
     }),
     mcpServers: mcpOverrides.mcpServers,
+    pluginMcp: mcpOverrides.pluginMcp,
   });
 }
 
@@ -8965,6 +8988,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (
               !toolCall.toolName.startsWith("mcp__") ||
               toolCall.toolName.startsWith("mcp__t3-code__") ||
+              toolCall.toolName.startsWith(CLAUDE_PLUGIN_T3_MCP_TOOL_PREFIX) ||
               !claudeSupportsMcpApps(liveQuery.capabilities)
             ) {
               return undefined;
@@ -13161,6 +13185,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             mcpSession,
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
+            usePluginMcp:
+              mcpSession !== undefined &&
+              (yield* isClaudeMcpPluginEnabled(homePath, adapterOptions.environment).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+              )),
             ...(queryPolicy.allowedTools === undefined
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
@@ -13295,6 +13325,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+          const queryEnvironment = withMcpPluginEnvironment(
+            claudeQueryEnvironment(
+              adapterOptions.environment,
+              turnInput.appThread,
+              turnInput.appThread.lineage.relationshipToParent === "subagent"
+                ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
+                : undefined,
+              shouldResume,
+            ),
+            mcpOverrides.pluginMcp,
+            path,
+            hostPlatform,
+          );
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             modelCatalog: catalog,
@@ -13314,14 +13357,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(launchArgSettings === undefined
               ? {}
               : { sdkSettings: claudeSdkLaunchArgSettings(launchArgSettings) }),
-            environment: claudeQueryEnvironment(
-              adapterOptions.environment,
-              turnInput.appThread,
-              turnInput.appThread.lineage.relationshipToParent === "subagent"
-                ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
-                : undefined,
-              shouldResume,
-            ),
+            environment: queryEnvironment,
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
             ...(mcpOverrides.allowedTools === undefined
               ? {}

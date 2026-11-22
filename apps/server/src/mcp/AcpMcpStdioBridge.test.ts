@@ -7,7 +7,12 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { vi } from "vite-plus/test";
 
-import { mcpToolSession, runAcpMcpCliFastPath, runAcpMcpStdioBridge } from "./AcpMcpStdioBridge.ts";
+import {
+  mcpToolSession,
+  runAcpMcpCliFastPath,
+  runAcpMcpStdioBridge,
+  runOfflineMcpStdioBridge,
+} from "./AcpMcpStdioBridge.ts";
 
 function makeHarness(
   responder: (request: Request) => Promise<Response> | Response,
@@ -155,15 +160,22 @@ describe("AcpMcpStdioBridge", () => {
 
       input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`);
       input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+      input.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "who", _meta: { threadId: "native-1" } } })}\n`,
+      );
       input.end();
       yield* Fiber.join(fiber);
 
-      expect(written).toHaveLength(2);
+      expect(written).toHaveLength(3);
       expect(JSON.parse(written[0]!)).toMatchObject({ id: 1 });
       expect(JSON.parse(written[1]!)).toMatchObject({ id: 2, result: { ok: true } });
       expect(requests[0]?.headers.get("authorization")).toBe("Bearer bridge-test");
       expect(requests[1]?.headers.get("mcp-session-id")).toBe("session-42");
       expect(requests[1]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
+      expect(requests[1]?.headers.get("mcp-method")).toBe("tools/list");
+      expect(requests[1]?.headers.has("t3-native-thread-id")).toBe(false);
+      expect(requests[2]?.headers.get("mcp-name")).toBe("who");
+      expect(requests[2]?.headers.get("t3-native-thread-id")).toBe("native-1");
     }),
   );
 
@@ -188,6 +200,32 @@ describe("AcpMcpStdioBridge", () => {
         id: 3,
         error: { code: -32603 },
       });
+    }),
+  );
+
+  it.effect("answers discovery with no tools when T3 Code did not start the plugin", () =>
+    Effect.gen(function* () {
+      const input = new NodeStream.PassThrough();
+      const written: Array<string> = [];
+      const fiber = yield* Effect.forkChild(
+        runOfflineMcpStdioBridge({ input, output: { write: (chunk) => written.push(chunk) } }),
+      );
+      for (const message of [
+        { id: 1, method: "initialize", params: { protocolVersion: "2026-07-28" } },
+        { id: 2, method: "tools/list" },
+        { method: "notifications/initialized" },
+        { id: 3, method: "tools/call" },
+      ]) {
+        input.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+      }
+      input.end();
+      yield* Fiber.join(fiber);
+
+      expect(written.map((line) => JSON.parse(line))).toMatchObject([
+        { id: 1, result: { protocolVersion: "2026-07-28" } },
+        { id: 2, result: { tools: [] } },
+        { id: 3, error: { code: -32601 } },
+      ]);
     }),
   );
 
