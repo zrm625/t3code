@@ -89,6 +89,7 @@ import * as PortScanner from "../../preview/PortScanner.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as ServerConfig from "../../config.ts";
+import { T3_MCP_AUTHORIZATION_ENV } from "../../mcp/mcpPlugin.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import { T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -942,6 +943,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
 describe("ClaudeAdapterV2 T3 tool instructions", () => {
   const options = (input: {
     readonly mcp: boolean;
+    readonly mcpPlugin?: boolean;
     readonly deviceToolsAvailable: boolean;
     readonly agentFeedback?: "off" | "on-request" | "auto";
   }) =>
@@ -958,7 +960,7 @@ describe("ClaudeAdapterV2 T3 tool instructions", () => {
         : {}),
       deviceToolsAvailable: input.deviceToolsAvailable,
       agentFeedback: input.agentFeedback ?? "off",
-      environment: {},
+      environment: input.mcpPlugin ? { [T3_MCP_AUTHORIZATION_ENV]: "test-credential" } : {},
     });
   const append = (input: Parameters<typeof options>[0]) =>
     (options(input).systemPrompt as { readonly append?: string }).append ?? "";
@@ -979,6 +981,10 @@ describe("ClaudeAdapterV2 T3 tool instructions", () => {
       append({ mcp, deviceToolsAvailable: false, agentFeedback }).includes("t3_feedback");
     assert.include(
       append({ mcp: true, deviceToolsAvailable: false, agentFeedback: "auto" }),
+      AGENT_FEEDBACK_INSTRUCTIONS.auto,
+    );
+    assert.include(
+      append({ mcp: false, mcpPlugin: true, deviceToolsAvailable: true, agentFeedback: "auto" }),
       AGENT_FEEDBACK_INSTRUCTIONS.auto,
     );
     assert.isFalse(feedback(true, "off"));
