@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "t3-code": {
+      "command": "t3",
+      "args": ["mcp-bridge"],
+      "env_vars": ["T3_MCP_ENDPOINT", "T3_MCP_AUTHORIZATION"],
+      "tool_timeout_sec": 3900,
+      "disabled_tools": ["t3_thread_wait", "delegate_task"]
+    },
+    "t3-code-direct": {
+      "command": "t3",
+      "args": ["mcp-bridge"],
+      "env_vars": ["T3_MCP_ENDPOINT", "T3_MCP_AUTHORIZATION"],
+      "tool_timeout_sec": 3900,
+      "enabled_tools": ["t3_thread_wait", "delegate_task"],
+      "omit_tools_from": ["code_mode", "deferred"]
+    }
+  }
+}

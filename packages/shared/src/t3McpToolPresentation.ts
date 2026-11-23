@@ -106,13 +106,15 @@ function tool(
   return { displayName, labels, icon, summaryAction };
 }
 
-// Codex registers "t3-code-direct" for T3 tools kept out of Code Mode.
+// Codex registers "t3-code-direct" for T3 tools kept out of Code Mode; Claude's plugin prefixes tool names.
 const T3_MCP_SERVER_ALIASES = new Set([
   "t3-code",
   "t3_code",
   "t3code",
   "t3-code-direct",
   "t3_code_direct",
+  "plugin_t3-code_t3-code",
+  "plugin:t3-code:t3-code",
 ]);
 
 const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
