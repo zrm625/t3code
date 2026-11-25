@@ -111,17 +111,32 @@ function applyWaylandActivationToken(token: string | undefined): void {
 function resizeHyprlandComposer(title: string, width: number, height: number) {
   // The renderer can resize its buffer without updating Hyprland's floating window bounds.
   const command = `
-    local matches = {}
-    for _, window in ipairs(hl.get_windows()) do
-      if window.pid == ${process.pid} and window.title == ${JSON.stringify(title)} then
-        table.insert(matches, window)
+    local pid = ${process.pid}
+    local function resize()
+      local matches = {}
+      for _, window in ipairs(hl.get_windows()) do
+        if window.pid == pid and window.title == ${JSON.stringify(title)} then
+          table.insert(matches, window)
+        end
+      end
+      if #matches == 1 then
+        hl.dispatch(hl.dsp.window.resize({
+          window = matches[1], x = ${width}, y = ${height}, relative = false
+        }))
       end
     end
-    if #matches == 1 then
-      hl.dispatch(hl.dsp.window.resize({
-        window = matches[1], x = ${width}, y = ${height}, relative = false
-      }))
+
+    resize()
+    -- A newly mapped window can still receive its initial size from a window rule.
+    _G.t3QuickComposerResizeTimers = _G.t3QuickComposerResizeTimers or {}
+    local timers = _G.t3QuickComposerResizeTimers
+    if timers[pid] then
+      timers[pid]:set_enabled(false)
     end
+    timers[pid] = hl.timer(function()
+      timers[pid] = nil
+      resize()
+    end, { timeout = 100, type = "oneshot" })
   `;
   return Effect.promise(
     () =>
@@ -321,6 +336,7 @@ export const make = Effect.gen(function* () {
     const applicationOrigin = getDesktopOrigin(environment.isDevelopment);
     const applicationUrl = `${getDesktopUrl(environment.isDevelopment)}#/quick-composer`;
     const title = `${environment.displayName} Quick Composer`;
+    const transparent = shortcutMode === "cli-only";
 
     const window = yield* electronWindow
       .create(
@@ -331,7 +347,8 @@ export const make = Effect.gen(function* () {
           minHeight: QUICK_COMPOSER_MIN_HEIGHT,
           maxHeight: QUICK_COMPOSER_MAX_HEIGHT,
           frame: false,
-          transparent: false,
+          transparent,
+          hasShadow: !transparent,
           resizable: true,
           show: false,
           alwaysOnTop: true,
@@ -340,7 +357,9 @@ export const make = Effect.gen(function* () {
           maximizable: false,
           minimizable: false,
           autoHideMenuBar: true,
-          backgroundColor: getInitialBackgroundColor(shouldUseDarkColors),
+          backgroundColor: transparent
+            ? "#00000000"
+            : getInitialBackgroundColor(shouldUseDarkColors),
           title,
           ...(environment.platform === "darwin" ? { type: "panel" as const } : {}),
           webPreferences: {
@@ -724,8 +743,7 @@ export const make = Effect.gen(function* () {
         QUICK_COMPOSER_MAX_HEIGHT,
         workArea.height,
       );
-      if (bounds.height === nextHeight) return;
-      target.setSize(bounds.width, nextHeight);
+      if (bounds.height !== nextHeight) target.setSize(bounds.width, nextHeight);
       if (shortcutMode === "cli-only" && hostEnvironment.HYPRLAND_INSTANCE_SIGNATURE) {
         yield* resizeHyprlandComposer(target.getTitle(), bounds.width, nextHeight);
       }
