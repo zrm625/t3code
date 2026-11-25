@@ -251,6 +251,10 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
   });
 }
 
+export function flushComposerDraftStorage(): void {
+  composerDebouncedStorage.flush();
+}
+
 export const PersistedComposerImageAttachment = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -616,6 +620,24 @@ interface ComposerDraftStoreState {
       checkoutPullRequest?: DraftCheckoutPullRequest | null;
     },
   ) => void;
+  /** Updates a standalone draft slot (e.g. Quick Composer) without altering per-project mappings. */
+  setStandaloneDraftThread: (
+    draftId: DraftId,
+    projectRef: ScopedProjectRef,
+    options?: {
+      threadId?: ThreadId;
+      branch?: string | null;
+      worktreePath?: string | null;
+      createdAt?: string;
+      envMode?: DraftThreadEnvMode;
+      startFromOrigin?: boolean;
+      runtimeMode?: RuntimeMode;
+      interactionMode?: ProviderInteractionMode;
+      environmentSelection?: "auto" | "manual";
+      loadBalancedEnvironmentId?: EnvironmentId | null;
+    },
+  ) => void;
+  rotateDraftThreadId: (draftId: DraftId, nextThreadId: ThreadId) => void;
   setDraftThreadContext: (
     threadRef: ComposerThreadTarget,
     options: {
@@ -3033,6 +3055,66 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             draftId,
             options,
           );
+        },
+        setStandaloneDraftThread: (draftId, projectRef, options) => {
+          if (draftId.length === 0) return;
+          set((state) => {
+            const existingThread = state.draftThreadsByThreadKey[draftId];
+            const nextDraftThread = createDraftThreadState(
+              projectRef,
+              options?.threadId ?? existingThread?.threadId ?? ThreadId.make(draftId),
+              projectDraftKey(projectRef),
+              existingThread,
+              options,
+            );
+            if (draftThreadsEqual(existingThread, nextDraftThread)) {
+              return state;
+            }
+            const nextDraftThreadsByThreadKey: Record<string, DraftThreadState> = {
+              ...state.draftThreadsByThreadKey,
+              [draftId]: nextDraftThread,
+            };
+            const existingDraft = state.draftsByThreadKey[draftId];
+            let nextDraftsByThreadKey = state.draftsByThreadKey;
+            if (
+              existingThread &&
+              existingThread.environmentId !== projectRef.environmentId &&
+              existingDraft !== undefined
+            ) {
+              const nextDraft = clearStaleFileUploadMetadata(
+                existingDraft,
+                projectRef.environmentId,
+              );
+              if (nextDraft !== existingDraft) {
+                nextDraftsByThreadKey = {
+                  ...state.draftsByThreadKey,
+                  [draftId]: nextDraft,
+                };
+              }
+            }
+            return {
+              draftsByThreadKey: nextDraftsByThreadKey,
+              draftThreadsByThreadKey: nextDraftThreadsByThreadKey,
+            };
+          });
+        },
+        rotateDraftThreadId: (draftId, nextThreadId) => {
+          if (draftId.length === 0) return;
+          set((state) => {
+            const existing = state.draftThreadsByThreadKey[draftId];
+            if (!existing || existing.threadId === nextThreadId) return state;
+            const { promotedTo: _promotedTo, ...rest } = existing;
+            return {
+              draftThreadsByThreadKey: {
+                ...state.draftThreadsByThreadKey,
+                [draftId]: {
+                  ...rest,
+                  threadId: nextThreadId,
+                  createdAt: new Date().toISOString(),
+                },
+              },
+            };
+          });
         },
         setDraftThreadContext: (threadRef, options) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";

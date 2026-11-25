@@ -185,13 +185,21 @@ export const layer = (ipcMain: DesktopIpcMain) =>
     Effect.gen(function* () {
       const electronWindow = yield* ElectronWindow.ElectronWindow;
       return make(ipcMain, (event) =>
-        Effect.map(
-          electronWindow.main,
-          (main) =>
-            Option.isSome(main) &&
-            main.value.webContents.id === event.sender.id &&
-            main.value.webContents.mainFrame === event.senderFrame,
-        ),
+        Effect.gen(function* () {
+          // Test mocks may only provide `main`; real services provide `trustedAppWindows`.
+          const windows =
+            typeof electronWindow.trustedAppWindows !== "undefined"
+              ? yield* electronWindow.trustedAppWindows
+              : Option.match(yield* electronWindow.main, {
+                  onNone: () => [],
+                  onSome: (window) => [window],
+                });
+          return windows.some(
+            (window) =>
+              window.webContents.id === event.sender.id &&
+              window.webContents.mainFrame === event.senderFrame,
+          );
+        }),
       );
     }),
   );

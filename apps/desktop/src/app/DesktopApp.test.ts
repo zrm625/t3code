@@ -45,6 +45,7 @@ import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
+import * as DesktopQuickComposer from "../quickComposer/DesktopQuickComposer.ts";
 import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
@@ -166,6 +167,9 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         Effect.provideService(DesktopSnapShot.DesktopSnapShot, {
           initialize: Effect.void,
         } as DesktopSnapShot.DesktopSnapShot["Service"]),
+        Effect.provideService(DesktopQuickComposer.DesktopQuickComposer, {
+          initialize: Effect.void,
+        } as DesktopQuickComposer.DesktopQuickComposer["Service"]),
         Effect.provideService(DesktopState.DesktopState, {
           quitting,
         } as DesktopState.DesktopState["Service"]),

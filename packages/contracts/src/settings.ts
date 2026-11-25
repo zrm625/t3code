@@ -221,6 +221,16 @@ export const SnapShotKeyChord = KeybindingShortcut.check(
   ),
 );
 export type SnapShotKeyChord = typeof SnapShotKeyChord.Type;
+export const QuickComposerShortcut = SnapShotKeyChord;
+export type QuickComposerShortcut = typeof QuickComposerShortcut.Type;
+export const DEFAULT_QUICK_COMPOSER_SHORTCUT: QuickComposerShortcut = {
+  key: " ",
+  metaKey: false,
+  ctrlKey: false,
+  shiftKey: true,
+  altKey: false,
+  modKey: true,
+};
 export const SNAP_SHOT_MODIFIERS = ["shift", "meta", "control", "alt"] as const;
 export const SnapShotModifier = Schema.Literals(SNAP_SHOT_MODIFIERS);
 export type SnapShotModifier = typeof SnapShotModifier.Type;
@@ -613,6 +623,11 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  quickComposerEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  quickComposerShortcut: QuickComposerShortcut.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_QUICK_COMPOSER_SHORTCUT)),
+  ),
+  quickComposerAutoVoice: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
@@ -2193,6 +2208,9 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
+  quickComposerEnabled: Schema.optionalKey(Schema.Boolean),
+  quickComposerShortcut: Schema.optionalKey(QuickComposerShortcut),
+  quickComposerAutoVoice: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });

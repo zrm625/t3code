@@ -460,6 +460,15 @@ type ChatViewProps =
       embedded?: never;
       routeKind: "draft";
       draftId: DraftId;
+      quickComposer?: {
+        readonly header: React.ReactNode;
+        readonly composerRef: React.RefObject<ChatComposerHandle | null>;
+        readonly onSendAccepted: (result: {
+          readonly environmentId: EnvironmentId;
+          readonly threadId: ThreadId;
+          readonly openInMain: boolean;
+        }) => void;
+      };
     };
 
 const DismissedFallbackWindowSchema = Schema.NullOr(Schema.String);
@@ -479,6 +488,9 @@ export default function ChatView(props: ChatViewProps) {
     embedded: parentPanel,
   } = props;
   const embedded = parentPanel !== undefined;
+  const quickComposer = routeKind === "draft" ? props.quickComposer : undefined;
+  const isQuickComposer = quickComposer !== undefined;
+  const isChromeless = embedded || isQuickComposer;
   const panelHostShell = useQuietThreadShell(parentPanel?.hostRef ?? null);
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
@@ -553,7 +565,8 @@ export default function ChatView(props: ChatViewProps) {
         });
   const promptRef = useRef("");
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
-  const composerRef = useComposerHandleContext() ?? localComposerRef;
+  const contextComposerRef = useComposerHandleContext();
+  const composerRef = quickComposer?.composerRef ?? contextComposerRef ?? localComposerRef;
   const queuedRunEdit = useQueuedRunEdit({
     environmentId,
     routeThreadRef,
@@ -3203,6 +3216,7 @@ export default function ChatView(props: ChatViewProps) {
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
+    quickComposerOnAccepted: quickComposer?.onSendAccepted,
   });
 
   const onWorktreeSetupWorkLocally = () => {
@@ -3539,14 +3553,14 @@ export default function ChatView(props: ChatViewProps) {
       ref={setWorkspaceLayoutElement}
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
-      {embedded ? null : (
+      {isChromeless ? null : (
         <DeviceSetupDialogHost
           threadKey={activeThreadKey}
           threadRef={activeThreadRef}
           state={deviceState}
         />
       )}
-      {rightPanelControlsAtRoot && !embedded ? panelLayoutControls : null}
+      {rightPanelControlsAtRoot && !isChromeless ? panelLayoutControls : null}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
@@ -3556,13 +3570,13 @@ export default function ChatView(props: ChatViewProps) {
         data-chat-column
         style={
           {
-            "--chat-header-height": embedded ? "0px" : "var(--workspace-topbar-height)",
+            "--chat-header-height": isChromeless ? "0px" : "var(--workspace-topbar-height)",
           } as CSSProperties
         }
         inert={rightPanelMaximized}
         onMouseUp={preventMiddleClickPasteOutsideEditable}
       >
-        {embedded ? null : (
+        {isChromeless ? null : (
           <header
             ref={threadPanelPopoverAnchorRef}
             data-chat-header
@@ -3781,9 +3795,11 @@ export default function ChatView(props: ChatViewProps) {
               inert={isRevertingCheckpoint}
               data-chat-composer-overlay="true"
               className={
-                isDraftHeroState
-                  ? "pointer-events-none absolute inset-0 z-20 flex items-center [@media(max-height:34rem)]:items-end"
-                  : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
+                isQuickComposer
+                  ? "pointer-events-none absolute inset-0 z-20 flex flex-col justify-start p-3"
+                  : isDraftHeroState
+                    ? "pointer-events-none absolute inset-0 z-20 flex items-center [@media(max-height:34rem)]:items-end"
+                    : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
               }
             >
               <div ref={draftHeroTransitionGroupRef} className="chat-composer-lane w-full">
@@ -3791,7 +3807,9 @@ export default function ChatView(props: ChatViewProps) {
                   data-chat-composer-stack="true"
                   className="group/composer-stack pointer-events-auto relative z-10 mx-auto w-full max-w-(--chat-content-max-width)"
                 >
-                  {isDraftHeroState ? (
+                  {isQuickComposer ? (
+                    quickComposer.header
+                  ) : isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
                         className="pb-4 group-has-data-[composer-shoulder-tab]/composer-stack:pb-0"
@@ -3855,7 +3873,9 @@ export default function ChatView(props: ChatViewProps) {
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
                                 multipleModelSelections={multipleModelSelections}
+                                quickComposerMode={isQuickComposer}
                                 supportsMultipleModels={
+                                  !isQuickComposer &&
                                   serverConfig?.environment.capabilities
                                     .requiredWorktreeBootstrap === true
                                 }
@@ -4102,10 +4122,13 @@ export default function ChatView(props: ChatViewProps) {
               </div>
             </div>
 
-            {canOperatePreview && activeThreadRef && activeEnvironmentServerBrowser && !embedded ? (
+            {canOperatePreview &&
+            activeThreadRef &&
+            activeEnvironmentServerBrowser &&
+            !isChromeless ? (
               <PreviewSessionSync threadRef={activeThreadRef} />
             ) : null}
-            {activeThreadRef && shownPreviewMiniPlayer && !embedded ? (
+            {activeThreadRef && shownPreviewMiniPlayer && !isChromeless ? (
               <ThreadPreviewMiniPlayer
                 key={`${activeThreadKey}:${previewMiniPlayerSourceKey(shownPreviewMiniPlayer.source)}`}
                 threadRef={activeThreadRef}
@@ -4113,7 +4136,7 @@ export default function ChatView(props: ChatViewProps) {
               />
             ) : null}
 
-            {embedded ? null : (
+            {isChromeless ? null : (
               <>
                 <BranchRestoreConfirmHost
                   threadKey={activeThreadKey}
@@ -4208,7 +4231,7 @@ export default function ChatView(props: ChatViewProps) {
           </ThreadFindCanvas>
         </div>
 
-        {embedded ? null : (
+        {isChromeless ? null : (
           <ChatTerminalDrawers
             activeThreadKey={activeThreadKey}
             activeTerminalOpen={Boolean(terminalUiState.terminalOpen)}
@@ -4224,7 +4247,7 @@ export default function ChatView(props: ChatViewProps) {
         )}
       </div>
 
-      {rightPanelPresent && activeThreadRef && !embedded ? (
+      {rightPanelPresent && activeThreadRef && !isChromeless ? (
         <ChatRightPanel
           sheet={shouldUsePlanSidebarSheet}
           workspaceLayoutElement={workspaceLayoutElement}

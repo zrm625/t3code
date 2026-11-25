@@ -293,6 +293,14 @@ interface ComposerSendInput {
   }) => Promise<AtomCommandResult<void, unknown>>;
   /** Links a checked-out pull request to its thread; best effort, failures only logged. */
   readonly linkCheckoutPullRequest: (threadRef: ScopedThreadRef, url: string) => void;
+  /** When set, handles Quick Composer acceptance instead of promoting/navigating a main draft. */
+  readonly quickComposerOnAccepted?:
+    | ((result: {
+        readonly environmentId: EnvironmentId;
+        readonly threadId: ThreadId;
+        readonly openInMain: boolean;
+      }) => void)
+    | undefined;
 }
 
 /**
@@ -376,6 +384,7 @@ export function useComposerSend(input: ComposerSendInput) {
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
+    quickComposerOnAccepted,
   } = input;
   const linkedEnvironments = useLinkedEnvironments(environmentId);
   const handleNewThread = useNewThreadHandler();
@@ -1452,9 +1461,10 @@ export function useComposerSend(input: ComposerSendInput) {
         }),
       );
     }
-    const sentDraftThreadRef = isLocalDraftThread
-      ? scopeThreadRef(environmentId, threadIdForSend)
-      : null;
+    const sentDraftThreadRef =
+      isLocalDraftThread && !quickComposerOnAccepted
+        ? scopeThreadRef(environmentId, threadIdForSend)
+        : null;
     // Keep new-thread flows from reusing this draft while attachments and worktree setup settle.
     if (sentDraftThreadRef) markPromotedDraftThreadByRef(sentDraftThreadRef);
     clearComposerDraftContent(composerDraftTarget);
@@ -1563,7 +1573,7 @@ export function useComposerSend(input: ComposerSendInput) {
             }
           : undefined;
       const backgroundThreadRef =
-        submissionIntent === "background" && isLocalDraftThread
+        !quickComposerOnAccepted && submissionIntent === "background" && isLocalDraftThread
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       // Read the live session, not the render snapshot: the draft is finalized away once the
@@ -1648,7 +1658,13 @@ export function useComposerSend(input: ComposerSendInput) {
             clearBackgroundDraftSubmissionByRef(sentDraftThreadRef);
           }
         }
-        if (backgroundThreadRef) {
+        if (quickComposerOnAccepted) {
+          quickComposerOnAccepted({
+            environmentId,
+            threadId: threadIdForSend,
+            openInMain: submissionIntent === "foreground",
+          });
+        } else if (backgroundThreadRef) {
           if (backgroundDraftOpened) {
             toastManager.add({
               type: "success",

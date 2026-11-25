@@ -155,3 +155,15 @@ export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-lo
 export const RESTART_AUDIO_SERVICE_CHANNEL = "desktop:restart-audio-service";
 
 export const START_FILE_DRAG_CHANNEL = "desktop:start-file-drag";
+
+export const QUICK_COMPOSER_GET_STATE_CHANNEL = "desktop:quick-composer-get-state";
+export const QUICK_COMPOSER_CHECK_SHORTCUT_CHANNEL = "desktop:quick-composer-check-shortcut";
+export const QUICK_COMPOSER_SET_SHORTCUT_SUPPRESSED_CHANNEL =
+  "desktop:quick-composer-set-shortcut-suppressed";
+export const QUICK_COMPOSER_TOGGLE_CHANNEL = "desktop:quick-composer-toggle";
+export const QUICK_COMPOSER_HIDE_CHANNEL = "desktop:quick-composer-hide";
+export const QUICK_COMPOSER_OPEN_THREAD_CHANNEL = "desktop:quick-composer-open-thread";
+export const QUICK_COMPOSER_SET_DRAFT_STATE_CHANNEL = "desktop:quick-composer-set-draft-state";
+export const QUICK_COMPOSER_ACQUIRE_MIC_CHANNEL = "desktop:quick-composer-acquire-mic";
+export const QUICK_COMPOSER_RELEASE_MIC_CHANNEL = "desktop:quick-composer-release-mic";
+export const QUICK_COMPOSER_EVENT_CHANNEL = "desktop:quick-composer-event";

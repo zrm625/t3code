@@ -3,7 +3,7 @@ import type { DatabaseMigrationProgress } from "./server.ts";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
 
 import { SnapShotSource } from "./chatAttachment.ts";
-import { EnvironmentId, PortSchema, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentId, PortSchema, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
   BrowserImportResult,
@@ -13,7 +13,12 @@ import type {
 import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
+import {
+  type ClientSettings,
+  type QuickComposerShortcut,
+  type QuitConfirmationMode,
+  SnapShotShortcut,
+} from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import { KeybindingShortcut, type PreviewForwardedShortcut } from "./keybindings.ts";
 
@@ -1246,6 +1251,7 @@ export interface DesktopBridge {
     complete: (response: DesktopAppActivationResponse) => Promise<void>;
     onRequest: (listener: (request: DesktopAppActivationRequest) => void) => () => void;
   };
+  quickComposer?: DesktopQuickComposerBridge;
   preview: DesktopPreviewBridge;
   /** On-device dictation through macOS 26 SpeechAnalyzer; absent in older desktop builds. */
   appleSpeech?: {
@@ -1330,6 +1336,66 @@ export const DesktopPreviewPickElementInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   voice: Schema.optional(DesktopPreviewAnnotationVoiceConfigSchema),
 });
+
+export const DesktopQuickComposerState = Schema.Struct({
+  supported: Schema.Boolean,
+  mode: Schema.Literals(["global-shortcut", "cli-only"]),
+  enabled: Schema.Boolean,
+  shortcutRegistered: Schema.Boolean,
+  shortcutLabel: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+  cliCommand: Schema.String,
+});
+export type DesktopQuickComposerState = typeof DesktopQuickComposerState.Type;
+
+export const DesktopQuickComposerShortcutAvailability = Schema.Struct({
+  available: Schema.Boolean,
+  accelerator: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+});
+export type DesktopQuickComposerShortcutAvailability =
+  typeof DesktopQuickComposerShortcutAvailability.Type;
+
+export const DesktopQuickComposerDraftState = Schema.Struct({
+  hasContent: Schema.Boolean,
+  busy: Schema.Boolean,
+});
+export type DesktopQuickComposerDraftState = typeof DesktopQuickComposerDraftState.Type;
+
+export const DesktopQuickComposerOpenThreadInput = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+});
+export type DesktopQuickComposerOpenThreadInput = typeof DesktopQuickComposerOpenThreadInput.Type;
+
+export const DesktopQuickComposerEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("shown"),
+    autoVoice: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("hide-requested"),
+  }),
+]);
+export type DesktopQuickComposerEvent = typeof DesktopQuickComposerEvent.Type;
+
+export interface DesktopQuickComposerBridge {
+  getState: () => Promise<DesktopQuickComposerState>;
+  checkShortcut: (
+    shortcut: QuickComposerShortcut,
+  ) => Promise<DesktopQuickComposerShortcutAvailability>;
+  setShortcutSuppressed: (suppressed: boolean) => Promise<void>;
+  toggle: () => Promise<void>;
+  hide: () => Promise<void>;
+  openThreadInMain: (input: DesktopQuickComposerOpenThreadInput) => Promise<void>;
+  setDraftState: (state: DesktopQuickComposerDraftState) => Promise<void>;
+  acquireMic: () => Promise<boolean>;
+  releaseMic: () => Promise<void>;
+  onEvent: (listener: (event: DesktopQuickComposerEvent) => void) => () => void;
+  onOpenThreadInMain: (
+    listener: (input: DesktopQuickComposerOpenThreadInput) => void,
+  ) => () => void;
+}
 
 export interface DesktopPreviewBridge {
   setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;

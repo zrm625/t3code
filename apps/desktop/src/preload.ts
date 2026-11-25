@@ -6,6 +6,8 @@ import type {
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewTabState,
+  DesktopQuickComposerEvent,
+  DesktopQuickComposerOpenThreadInput,
   DesktopSnapShotEvent,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
@@ -570,6 +572,39 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.on(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrappedListener);
       return () =>
         ipcRenderer.removeListener(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrappedListener);
+    },
+  },
+  quickComposer: {
+    getState: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_GET_STATE_CHANNEL),
+    checkShortcut: (shortcut) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_CHECK_SHORTCUT_CHANNEL, shortcut),
+    setShortcutSuppressed: (suppressed) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_SET_SHORTCUT_SUPPRESSED_CHANNEL, suppressed),
+    toggle: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_TOGGLE_CHANNEL),
+    hide: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_HIDE_CHANNEL),
+    openThreadInMain: (input) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL, input),
+    setDraftState: (state) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_SET_DRAFT_STATE_CHANNEL, state),
+    acquireMic: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_ACQUIRE_MIC_CHANNEL),
+    releaseMic: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_RELEASE_MIC_CHANNEL),
+    onEvent: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, event: unknown) => {
+        if (typeof event !== "object" || event === null) return;
+        listener(event as DesktopQuickComposerEvent);
+      };
+      ipcRenderer.on(IpcChannels.QUICK_COMPOSER_EVENT_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.QUICK_COMPOSER_EVENT_CHANNEL, wrappedListener);
+    },
+    onOpenThreadInMain: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, input: unknown) => {
+        if (typeof input !== "object" || input === null) return;
+        listener(input as DesktopQuickComposerOpenThreadInput);
+      };
+      ipcRenderer.on(IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL, wrappedListener);
     },
   },
 } satisfies DesktopBridge);

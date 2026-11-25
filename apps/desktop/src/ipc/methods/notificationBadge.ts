@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ElectronApp from "../../electron/ElectronApp.ts";
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import { SET_NOTIFICATION_BADGE_CHANNEL } from "../channels.ts";
 
@@ -20,9 +21,10 @@ const NotificationBadge = Schema.Struct({
 function applyNotificationBadge(
   platform: NodeJS.Platform,
   { count, image }: typeof NotificationBadge.Type,
+  isMainFocused: boolean,
 ): void {
   try {
-    if (Electron.BrowserWindow.getFocusedWindow()) count = 0;
+    if (isMainFocused) count = 0;
     if (platform === "win32") {
       const overlay = count > 0 && image ? Electron.nativeImage.createFromDataURL(image) : null;
       for (const window of Electron.BrowserWindow.getAllWindows()) {
@@ -45,9 +47,22 @@ export const installNotificationBadge = Effect.fn("desktop.ipc.installNotificati
   function* () {
     const ipc = yield* DesktopIpc.DesktopIpc;
     const app = yield* ElectronApp.ElectronApp;
+    const electronWindow = yield* Effect.serviceOption(ElectronWindow.ElectronWindow);
     const platform = yield* HostProcess.Platform;
+    const context = yield* Effect.context<never>();
+    const runSync = Effect.runSyncWith(context);
+    const isMainWindow = (window: Electron.BrowserWindow | null | undefined): boolean => {
+      if (!window || (typeof window.isDestroyed === "function" && window.isDestroyed())) {
+        return false;
+      }
+      if (electronWindow._tag === "None") return true;
+      const main = runSync(electronWindow.value.main);
+      if (main._tag === "None") return false;
+      return main.value.id === window.id;
+    };
+    const isMainFocused = () => isMainWindow(Electron.BrowserWindow.getFocusedWindow());
     const clear = () => {
-      applyNotificationBadge(platform, { count: 0, image: null });
+      applyNotificationBadge(platform, { count: 0, image: null }, false);
       for (const window of Electron.BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) window.webContents.send(SET_NOTIFICATION_BADGE_CHANNEL);
       }
@@ -59,12 +74,17 @@ export const installNotificationBadge = Effect.fn("desktop.ipc.installNotificati
         result: Schema.Void,
         handler: (badge) =>
           Effect.sync(() => {
-            if (badge.count > 0 && Electron.BrowserWindow.getFocusedWindow()) clear();
-            else applyNotificationBadge(platform, badge);
+            if (badge.count > 0 && isMainFocused()) clear();
+            else applyNotificationBadge(platform, badge, isMainFocused());
           }),
       }),
     );
-    yield* app.on("browser-window-focus", clear);
+    yield* app.on(
+      "browser-window-focus",
+      (_event: Electron.Event, window?: Electron.BrowserWindow) => {
+        if (window === undefined || isMainWindow(window)) clear();
+      },
+    );
     yield* app.on("before-quit", clear);
     yield* Effect.addFinalizer(() => Effect.sync(clear));
   },
