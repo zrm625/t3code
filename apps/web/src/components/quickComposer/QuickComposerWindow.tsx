@@ -171,13 +171,15 @@ export function QuickComposerWindow() {
     },
   );
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to Quick Composer show/hide lifecycle events from the desktop main process
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to Quick Composer show/hide lifecycle events and signals mount readiness to the desktop main process
   useEffect(() => {
     const bridge = window.desktopBridge?.quickComposer;
     if (!bridge) return;
-    return bridge.onEvent((event) => {
+    const unsubscribe = bridge.onEvent((event) => {
       void handleDesktopEvent(event);
     });
+    void bridge.ready().catch(() => undefined);
+    return unsubscribe;
   }, []);
 
   // Hide on Escape when idle and no overlay/combobox/dialog owns Escape.

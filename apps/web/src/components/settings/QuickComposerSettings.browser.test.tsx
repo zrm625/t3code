@@ -42,6 +42,7 @@ describe("QuickComposerSettings", () => {
         getState: vi.fn(async () => state),
         checkShortcut: vi.fn(async () => ({ available: true })),
         setShortcutSuppressed: vi.fn(async () => undefined),
+        ready: vi.fn(async () => undefined),
         toggle,
         hide: vi.fn(async () => undefined),
         openThreadInMain: vi.fn(async () => undefined),

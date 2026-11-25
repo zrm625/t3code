@@ -39,6 +39,16 @@ export const setQuickComposerShortcutSuppressed = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const readyQuickComposer = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.QUICK_COMPOSER_READY_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.quickComposer.ready")(function* (_input, event) {
+    const senderId = event?.sender.id ?? -1;
+    yield* (yield* DesktopQuickComposer.DesktopQuickComposer).markReady(senderId);
+  }),
+});
+
 export const toggleQuickComposer = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.QUICK_COMPOSER_TOGGLE_CHANNEL,
   payload: Schema.Void,

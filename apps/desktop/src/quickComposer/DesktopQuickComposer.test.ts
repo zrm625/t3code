@@ -163,6 +163,11 @@ function makeFakeWindow(webContentsId: number) {
     window: window as unknown as Electron.BrowserWindow,
     raw: window,
     sentEvents,
+    emitClose: () => {
+      const event = { preventDefault: vi.fn() };
+      emit(windowListeners, "close", event);
+      return event;
+    },
   };
 }
 
@@ -308,9 +313,21 @@ describe("DesktopQuickComposer", () => {
             const popout = createdWindows[0]!;
             expect(popout.raw.show).toHaveBeenCalledTimes(1);
             expect(popout.raw.focus).toHaveBeenCalledTimes(1);
+            // Queued shown event waits for renderer mount readiness instead of did-finish-load.
+            expect(popout.sentEvents).toHaveLength(0);
+
+            yield* service.markReady(popout.raw.id);
             expect(popout.sentEvents.at(-1)?.payload).toEqual({
               type: "shown",
               autoVoice: true,
+            } satisfies DesktopQuickComposerEvent);
+
+            // Native OS close routes through the renderer hide handshake so active dictation stops first.
+            const closeEvent = popout.emitClose();
+            expect(closeEvent.preventDefault).toHaveBeenCalledOnce();
+            expect(popout.raw.hide).not.toHaveBeenCalled();
+            expect(popout.sentEvents.at(-1)?.payload).toEqual({
+              type: "hide-requested",
             } satisfies DesktopQuickComposerEvent);
 
             yield* service.toggle();

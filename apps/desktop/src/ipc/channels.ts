@@ -48,6 +48,7 @@ export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
 export const SET_CLIENT_SETTINGS_CHANNEL = "desktop:set-client-settings";
+export const CLIENT_SETTINGS_CHANGED_CHANNEL = "desktop:client-settings-changed";
 export const SETUP_SNAP_SHOT_CHANNEL = "desktop:setup-snap-shot";
 export const PREVIEW_SNAP_SHOT_CONFIG_CHANNEL = "desktop:preview-snap-shot-config";
 export const APPLY_SNAP_SHOT_CONFIG_CHANNEL = "desktop:apply-snap-shot-config";
@@ -160,6 +161,7 @@ export const QUICK_COMPOSER_GET_STATE_CHANNEL = "desktop:quick-composer-get-stat
 export const QUICK_COMPOSER_CHECK_SHORTCUT_CHANNEL = "desktop:quick-composer-check-shortcut";
 export const QUICK_COMPOSER_SET_SHORTCUT_SUPPRESSED_CHANNEL =
   "desktop:quick-composer-set-shortcut-suppressed";
+export const QUICK_COMPOSER_READY_CHANNEL = "desktop:quick-composer-ready";
 export const QUICK_COMPOSER_TOGGLE_CHANNEL = "desktop:quick-composer-toggle";
 export const QUICK_COMPOSER_HIDE_CHANNEL = "desktop:quick-composer-hide";
 export const QUICK_COMPOSER_OPEN_THREAD_CHANNEL = "desktop:quick-composer-open-thread";

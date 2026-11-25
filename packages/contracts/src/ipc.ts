@@ -1150,6 +1150,7 @@ export interface DesktopBridge {
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
+  onClientSettingsChanged?: (listener: (settings: ClientSettings) => void) => () => void;
   getConnectionCatalog: () => Promise<string | null>;
   setConnectionCatalog: (catalog: string) => Promise<boolean>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
@@ -1385,6 +1386,7 @@ export interface DesktopQuickComposerBridge {
     shortcut: QuickComposerShortcut,
   ) => Promise<DesktopQuickComposerShortcutAvailability>;
   setShortcutSuppressed: (suppressed: boolean) => Promise<void>;
+  ready: () => Promise<void>;
   toggle: () => Promise<void>;
   hide: () => Promise<void>;
   openThreadInMain: (input: DesktopQuickComposerOpenThreadInput) => Promise<void>;

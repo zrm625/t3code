@@ -62,6 +62,7 @@ export class DesktopQuickComposer extends Context.Service<
       shortcut: QuickComposerShortcut,
     ) => Effect.Effect<DesktopQuickComposerShortcutAvailability>;
     readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
+    readonly markReady: (senderWebContentsId: number) => Effect.Effect<void>;
     readonly toggle: (options?: {
       readonly activationToken?: string | undefined;
       readonly allowWhenDisabled?: boolean | undefined;
@@ -149,6 +150,7 @@ export const make = Effect.gen(function* () {
   let shortcutSuppressed = false;
   let registeredAccelerator: string | null = null;
   let quickComposerWindow: Electron.BrowserWindow | null = null;
+  let windowReadyToShow = false;
   let quickComposerReady = false;
   let pendingShowEvent: DesktopQuickComposerEvent | null = null;
   let draftState: DesktopQuickComposerDraftState = { hasContent: false, busy: false };
@@ -200,6 +202,7 @@ export const make = Effect.gen(function* () {
     clearHideHandshakeTimer();
     const target = quickComposerWindow;
     quickComposerWindow = null;
+    windowReadyToShow = false;
     quickComposerReady = false;
     pendingShowEvent = null;
     if (target && !target.isDestroyed()) {
@@ -256,6 +259,17 @@ export const make = Effect.gen(function* () {
   const sendEventToWindow = (target: Electron.BrowserWindow, event: DesktopQuickComposerEvent) => {
     if (target.isDestroyed()) return;
     target.webContents.send(QUICK_COMPOSER_EVENT_CHANNEL, event);
+  };
+
+  const requestHide = (target: Electron.BrowserWindow) => {
+    if (quickComposerReady) {
+      sendEventToWindow(target, { type: "hide-requested" });
+      scheduleHideHandshakeFallback(() => {
+        void runPromise(hideWindowNow());
+      });
+      return;
+    }
+    void runPromise(hideWindowNow());
   };
 
   const positionWindowOnCursorDisplay = (target: Electron.BrowserWindow) => {
@@ -346,6 +360,7 @@ export const make = Effect.gen(function* () {
     });
 
     quickComposerWindow = window;
+    windowReadyToShow = false;
     quickComposerReady = false;
 
     const webContentsId = window.webContents.id;
@@ -362,19 +377,20 @@ export const make = Effect.gen(function* () {
         isDevelopment: environment.isDevelopment,
       },
     );
-    window.webContents.once("did-finish-load", () => {
-      if (quickComposerWindow !== window || window.isDestroyed()) return;
-      quickComposerReady = true;
-      if (pendingShowEvent !== null) {
-        const queued = pendingShowEvent;
-        pendingShowEvent = null;
-        sendEventToWindow(window, queued);
+    window.once("ready-to-show", () => {
+      if (quickComposerWindow === window && !window.isDestroyed()) {
+        windowReadyToShow = true;
+      }
+    });
+    window.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+      if (quickComposerWindow === window && isMainFrame && !isInPlace) {
+        quickComposerReady = false;
       }
     });
     window.on("close", (event) => {
       if (!window.isDestroyed() && quickComposerWindow === window) {
         event.preventDefault();
-        void runPromise(hideWindowNow());
+        requestHide(window);
       }
     });
     window.once("closed", () => {
@@ -384,6 +400,7 @@ export const make = Effect.gen(function* () {
       }
       if (quickComposerWindow === window) {
         quickComposerWindow = null;
+        windowReadyToShow = false;
         quickComposerReady = false;
         pendingShowEvent = null;
         clearIdleTimer();
@@ -426,21 +443,16 @@ export const make = Effect.gen(function* () {
       autoVoice: currentSettings.quickComposerAutoVoice,
     };
 
-    const revealTarget = () => {
-      if (target.isDestroyed()) return;
-      target.show();
-      target.focus();
-      if (quickComposerReady) {
-        sendEventToWindow(target, shownEvent);
-      } else {
-        pendingShowEvent = shownEvent;
-      }
-    };
-
     if (quickComposerReady) {
-      revealTarget();
+      sendEventToWindow(target, shownEvent);
     } else {
       pendingShowEvent = shownEvent;
+    }
+
+    if (windowReadyToShow) {
+      target.show();
+      target.focus();
+    } else {
       target.once("ready-to-show", () => {
         if (quickComposerWindow === target && !target.isDestroyed()) {
           positionWindowOnCursorDisplay(target);
@@ -462,10 +474,7 @@ export const make = Effect.gen(function* () {
 
     const existing = quickComposerWindow;
     if (existing && !existing.isDestroyed() && existing.isVisible() && existing.isFocused()) {
-      sendEventToWindow(existing, { type: "hide-requested" });
-      scheduleHideHandshakeFallback(() => {
-        void runPromise(hideWindowNow());
-      });
+      requestHide(existing);
       return true;
     }
 
@@ -647,6 +656,20 @@ export const make = Effect.gen(function* () {
     state: Ref.get(stateRef),
     checkShortcut,
     setShortcutSuppressed,
+    markReady: Effect.fn("desktop.quickComposer.markReady")((senderWebContentsId) =>
+      Effect.sync(() => {
+        const target = quickComposerWindow;
+        if (!target || target.isDestroyed() || target.webContents.id !== senderWebContentsId) {
+          return;
+        }
+        quickComposerReady = true;
+        if (pendingShowEvent !== null) {
+          const queued = pendingShowEvent;
+          pendingShowEvent = null;
+          sendEventToWindow(target, queued);
+        }
+      }),
+    ),
     toggle,
     hide: hideWindowNow().pipe(windowMutex.withPermits(1)),
     openThreadInMain: Effect.fn("desktop.quickComposer.openThreadInMain")(function* (input) {
