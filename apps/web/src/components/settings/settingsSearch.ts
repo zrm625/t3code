@@ -27,6 +27,7 @@ export type SettingsPath =
   | "/settings/diffs"
   | "/settings/keybindings"
   | "/settings/snap-shot"
+  | "/settings/quick-composer"
   | "/settings/providers"
   | "/settings/threads"
   | "/settings/browser"
@@ -105,6 +106,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diffs": msg("Diffs & pull requests"),
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
+  "/settings/quick-composer": msg("Quick Composer"),
   "/settings/providers": msg("Providers"),
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser"),
@@ -150,6 +152,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/keybindings",
       "/settings/voice",
       "/settings/snap-shot",
+      "/settings/quick-composer",
     ],
   },
   {
@@ -1084,6 +1087,26 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "snap-shot-enabled",
   },
   {
+    id: "quick-composer-enabled",
+    title: msg("Quick Composer"),
+    searchTerms: [msg("pop out floating chat box spotlight global shortcut")],
+    to: "/settings/quick-composer",
+  },
+  {
+    id: "quick-composer-shortcut",
+    title: msg("Global shortcut"),
+    to: "/settings/quick-composer",
+    targetId: "quick-composer-enabled",
+    searchTerms: [msg("quick composer hotkey keybind wayland cli")],
+  },
+  {
+    id: "quick-composer-auto-voice",
+    title: msg("Start with voice dictation active"),
+    to: "/settings/quick-composer",
+    targetId: "quick-composer-enabled",
+    searchTerms: [msg("quick composer voice microphone auto dictate")],
+  },
+  {
     id: "providers",
     title: msg("Providers"),
     to: "/settings/providers",
@@ -1540,6 +1563,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/chat": null,
   "/settings/diffs": null,
   "/settings/snap-shot": null,
+  "/settings/quick-composer": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
   "/settings/threads": null,

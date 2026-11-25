@@ -12,7 +12,13 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeRotatingLogFileWriter } from "../app/DesktopObservability.ts";
 
 export interface RendererIdentity {
-  readonly surface: "main" | "preview" | "splash" | "picture-in-picture" | "devtools";
+  readonly surface:
+    | "main"
+    | "preview"
+    | "splash"
+    | "picture-in-picture"
+    | "quick-composer"
+    | "devtools";
   readonly tabId?: string;
 }
 

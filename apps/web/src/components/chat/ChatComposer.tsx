@@ -349,6 +349,11 @@ export interface ChatComposerHandle {
     detectTrigger?: boolean;
   }) => void;
   addTerminalContext: (selection: TerminalContextSelection) => void;
+  startDictation: () => Promise<void>;
+  stopDictation: () => Promise<void>;
+  isDictating: () => boolean;
+  canStartDictation: () => boolean;
+  submitWithIntent: (submissionIntent: ComposerSubmissionIntent) => void;
   getSendContext: () => {
     answeringPendingUserInput: boolean;
     prompt: string;
@@ -452,6 +457,7 @@ export interface ChatComposerProps {
   onComposerOverlayHeightChange: (height: number) => void;
   /** The new-thread strip names the permissions, so the controls row hides its chip. */
   permissionsShownInStrip: boolean;
+  quickComposerMode?: boolean;
 
   promptRef: React.RefObject<string>;
   composerImagesRef: React.RefObject<ComposerImageAttachment[]>;
@@ -584,6 +590,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onComposerOverlayHeightChange,
     promptRef,
     composerRef,
+    quickComposerMode = false,
     composerImagesRef,
     composerFilesRef,
     composerTerminalContextsRef,
@@ -1973,6 +1980,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectName,
     ownerKey: questionAttachmentTarget ?? composerDraftTargetKey,
     disabled: dictationDisabled,
+    ...(quickComposerMode ? { offerSetup: false } : {}),
     label: activeThread?.title ?? null,
     presented: !hiddenThread,
     // A question's answer lives only in this composer, so only the thread draft outlives it.
@@ -2307,6 +2315,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     submissionIntent?: ComposerSubmissionIntent,
     options?: { readonly afterDictation?: boolean },
   ) => {
+    const resolvedSubmissionIntent =
+      submissionIntent ?? (quickComposerMode ? "background" : undefined);
     if (voiceInputActive && !options?.afterDictation) {
       event?.preventDefault();
       const queuedOwnerKey = attachmentTargetKey;
@@ -2328,7 +2338,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const stillLive =
           composerMountedRef.current && attachmentTargetKeyRef.current === queuedOwnerKey;
         if (stillLive) {
-          submitComposerRef.current(dispatchMode, submissionIntent, { afterDictation: true });
+          submitComposerRef.current(dispatchMode, resolvedSubmissionIntent, {
+            afterDictation: true,
+          });
           return;
         }
         if (
@@ -2349,24 +2361,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           submissionTarget: capturedSubmissionTarget,
           event: undefined,
           onSend: (sendEvent) => {
-            capturedDetachedSend(sendEvent, resolvedDispatchMode, submissionIntent, undefined, {
-              prompt: transcribedText,
-              sendContext: {
-                ...capturedSendContext,
-                ...(latestDraft
-                  ? {
-                      images: latestDraft.images,
-                      files: latestDraft.files,
-                      terminalContexts: latestDraft.terminalContexts,
-                      previewAnnotations: latestDraft.previewAnnotations,
-                      reviewComments: latestDraft.reviewComments,
-                      threadContexts: latestDraft.threadContexts,
-                      environmentContexts: latestDraft.environmentContexts,
-                    }
-                  : {}),
+            capturedDetachedSend(
+              sendEvent,
+              resolvedDispatchMode,
+              resolvedSubmissionIntent,
+              undefined,
+              {
                 prompt: transcribedText,
+                sendContext: {
+                  ...capturedSendContext,
+                  ...(latestDraft
+                    ? {
+                        images: latestDraft.images,
+                        files: latestDraft.files,
+                        terminalContexts: latestDraft.terminalContexts,
+                        previewAnnotations: latestDraft.previewAnnotations,
+                        reviewComments: latestDraft.reviewComments,
+                        threadContexts: latestDraft.threadContexts,
+                        environmentContexts: latestDraft.environmentContexts,
+                      }
+                    : {}),
+                  prompt: transcribedText,
+                },
               },
-            });
+            );
             return true;
           },
         });
@@ -2421,7 +2439,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               activeTurnDefault: followUpBehavior,
               canSteer,
             }),
-          submissionIntent,
+          resolvedSubmissionIntent,
         );
         return !providerInputRejectedRef.current;
       },
@@ -2570,6 +2588,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) => {
     if (key === "Escape" && composerSendHeld && !event.isComposing) {
       cancelHeldSend();
+      return true;
+    }
+    if (
+      quickComposerMode &&
+      key === "Enter" &&
+      !event.isComposing &&
+      event.shiftKey &&
+      (event.metaKey || event.ctrlKey)
+    ) {
+      event.preventDefault();
+      submitComposer(event, undefined, "foreground");
       return true;
     }
     return composerCommandKeyHandler({
@@ -3410,6 +3439,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         trigger.click();
       },
       compactContext: compactThreadContextStable,
+      startDictation: async () => {
+        if (!speechInput.available || dictationDisabled || voiceInputActive) return;
+        await speechInput.start();
+      },
+      stopDictation: async () => {
+        if (!voiceInputActive) return;
+        await speechInput.stop();
+      },
+      isDictating: () => voiceInputActive,
+      canStartDictation: () => speechInput.available && !dictationDisabled && !voiceInputActive,
+      submitWithIntent: (intent) => {
+        submitComposer(undefined, undefined, intent);
+      },
       isModelPickerOpen: () => isComposerModelPickerOpen,
       isCaretAtStart: () => {
         const range = composerEditorRef.current?.readSelectionRange();

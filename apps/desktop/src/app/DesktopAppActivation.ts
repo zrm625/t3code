@@ -26,6 +26,7 @@ import type * as Electron from "electron";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL } from "../ipc/channels.ts";
+import * as DesktopQuickComposer from "../quickComposer/DesktopQuickComposer.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { DesktopAppActivationBroker } from "./DesktopAppActivationBroker.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -299,6 +300,7 @@ export const make = Effect.gen(function* () {
   const desktopEnvironment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
+  const quickComposer = yield* Effect.serviceOption(DesktopQuickComposer.DesktopQuickComposer);
   const path = yield* Path.Path;
   const userId = yield* HostProcess.UserId;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -337,7 +339,40 @@ export const make = Effect.gen(function* () {
           startDesktopAppControlServer({
             ...address,
             userId,
-            handle: (request) => broker.request(request),
+            handle: async (request) => {
+              if (request.type === "quick-composer") {
+                if (Option.isNone(quickComposer)) {
+                  return {
+                    version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+                    requestId: request.requestId,
+                    ok: false,
+                    code: "quick-composer-disabled",
+                    message: "Quick Composer is not available in this desktop session.",
+                  } satisfies DesktopAppActivationResponse;
+                }
+                const toggled = await runPromise(
+                  quickComposer.value.toggle({
+                    activationToken: request.activationToken,
+                  }),
+                );
+                if (!toggled) {
+                  return {
+                    version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+                    requestId: request.requestId,
+                    ok: false,
+                    code: "quick-composer-disabled",
+                    message: "Quick Composer is disabled. Enable it in Settings → Quick Composer.",
+                  } satisfies DesktopAppActivationResponse;
+                }
+                return {
+                  version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+                  requestId: request.requestId,
+                  ok: true,
+                  type: "quick-composer",
+                } satisfies DesktopAppActivationResponse;
+              }
+              return broker.request(request);
+            },
             cancel: (requestId) => broker.cancel(requestId),
             onReclaimError: (cause) =>
               void runPromise(

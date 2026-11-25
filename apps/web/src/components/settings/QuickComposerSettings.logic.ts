@@ -1,0 +1,48 @@
+import type { DesktopQuickComposerState, QuickComposerShortcut } from "@t3tools/contracts";
+import { msg } from "gt-react";
+
+import type { MessageResolver } from "../../i18n/messages";
+
+export function quickComposerUnavailableMessage(
+  hasBridge: boolean,
+  resolve: MessageResolver,
+): string | undefined {
+  if (!hasBridge) {
+    return resolve(msg("Quick Composer is available in the desktop app."));
+  }
+  return undefined;
+}
+
+export function quickComposerStatus(
+  state: DesktopQuickComposerState | null,
+  enabled: boolean,
+  formattedShortcut: string,
+  resolve: MessageResolver,
+): string | undefined {
+  if (!state) return undefined;
+  if (!enabled) return undefined;
+  if (state.mode === "cli-only") {
+    return resolve(
+      msg("Bind the command below in your Wayland compositor to toggle Quick Composer."),
+    );
+  }
+  if (state.message) return state.message;
+  if (state.shortcutRegistered) {
+    return resolve(msg("Global shortcut active ({shortcut}).", { shortcut: formattedShortcut }));
+  }
+  return resolve(msg("Global shortcut is not registered."));
+}
+
+export function sameQuickComposerShortcut(
+  left: QuickComposerShortcut,
+  right: QuickComposerShortcut,
+): boolean {
+  return (
+    left.key === right.key &&
+    left.modKey === right.modKey &&
+    left.metaKey === right.metaKey &&
+    left.ctrlKey === right.ctrlKey &&
+    left.altKey === right.altKey &&
+    left.shiftKey === right.shiftKey
+  );
+}

@@ -95,10 +95,13 @@ function layerElectronWindow(window: ReturnType<typeof makeTestWindow>["window"]
     ElectronWindow.ElectronWindow.of({
       create: () => Effect.die("unexpected BrowserWindow creation"),
       main: Effect.succeedSome(window as Electron.BrowserWindow),
+      trustedAppWindows: Effect.succeed([window as Electron.BrowserWindow]),
+      isTrustedAppWebContentsId: () => Effect.succeed(false),
       currentMainOrFirst: Effect.succeedSome(window as Electron.BrowserWindow),
       focusedMainOrFirst: Effect.succeedSome(window as Electron.BrowserWindow),
       setMain: () => Effect.void,
       clearMain: () => Effect.void,
+      onMainCleared: () => Effect.void,
       prepareReveal: () => Effect.succeed(false),
       reveal: () => Effect.void,
       sendAll: () => Effect.void,

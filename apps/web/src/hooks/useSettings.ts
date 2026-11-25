@@ -80,6 +80,7 @@ let clientSettingsHydrationGeneration = 0;
 let clientSettingsPersistenceQueue: Promise<void> = Promise.resolve();
 let deferredClientSettingsPatchCount = 0;
 let unsubscribeOtherTabClientSettings: (() => void) | null = null;
+let unsubscribeDesktopClientSettings: (() => void) | null = null;
 
 function emitClientSettingsChange() {
   for (const listener of clientSettingsListeners) {
@@ -160,6 +161,10 @@ async function hydrateClientSettings(): Promise<void> {
       unsubscribeOtherTabClientSettings ??= subscribeBrowserClientSettingsWrites(
         refreshClientSettingsFromOtherTab,
       );
+      unsubscribeDesktopClientSettings ??=
+        (typeof window !== "undefined"
+          ? window.desktopBridge?.onClientSettingsChanged?.(applyClientSettingsFromDesktopBroadcast)
+          : undefined) ?? null;
       setClientSettingsHydrationStatus("ready");
     } catch (error) {
       if (hydrationGeneration === clientSettingsHydrationGeneration) {
@@ -195,6 +200,12 @@ function refreshClientSettingsFromOtherTab(): void {
       ...safeErrorLogAttributes(error),
     });
   });
+}
+
+function applyClientSettingsFromDesktopBroadcast(next: ClientSettings): void {
+  void enqueueClientSettingsPersistence(async () => {
+    replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, ...next });
+  }).catch(() => undefined);
 }
 
 const defaultClientSettingsPersistence = (settings: ClientSettings): Promise<void> =>
@@ -821,6 +832,8 @@ export function __resetClientSettingsPersistenceForTests(): void {
   deferredClientSettingsPatchCount = 0;
   unsubscribeOtherTabClientSettings?.();
   unsubscribeOtherTabClientSettings = null;
+  unsubscribeDesktopClientSettings?.();
+  unsubscribeDesktopClientSettings = null;
   clientSettingsListeners.clear();
   clientSettingsHydrationListeners.clear();
 }

@@ -1587,6 +1587,23 @@ describe("composerDraftStore draft promotion", () => {
       "retry-thread",
     );
   });
+
+  it("excludes standalone drafts from automatic draft promotion", async () => {
+    const h = draftPromotionHarness();
+    const store = useComposerDraftStore.getState();
+    const standaloneDraftId = DraftId.make("quick-composer");
+    store.setStandaloneDraftThread(standaloneDraftId, projectRef, { threadId });
+    h.arrive(threadRef, {
+      latestRun: preparingRun,
+      latestUserMessageAt: "2026-03-29T00:00:00.000Z",
+    });
+    h.flush();
+    await waitForDraftHeroTransition();
+    expect(useComposerDraftStore.getState().getDraftSession(standaloneDraftId)).toMatchObject({
+      threadId,
+      standalone: true,
+    });
+  });
 });
 
 describe("composerDraftStore modelSelection", () => {

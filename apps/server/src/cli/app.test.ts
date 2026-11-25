@@ -298,10 +298,11 @@ describe("t3 app", () => {
         yield* runCli(["app"], { T3CODE_HOME: baseDir });
         yield* runCli(["app", explicitPath, "--base-dir", baseDir]);
 
-        expect(desktop.received.map((request) => request.workspaceRoot)).toEqual([
-          workingDirectory,
-          explicitPath,
-        ]);
+        expect(
+          desktop.received.map((request) =>
+            request.type === "open-workspace" ? request.workspaceRoot : undefined,
+          ),
+        ).toEqual([workingDirectory, explicitPath]);
         expect(desktop.received.every((request) => request.platform === platform)).toBe(true);
       }).pipe(Effect.scoped),
     ),
@@ -399,5 +400,56 @@ describe("t3 app", () => {
           }
         }).pipe(Effect.provideService(HostProcess.HomeDirectory, root), Effect.scoped),
       ),
+  );
+
+  it.effect("t3 quick-composer sends type quick-composer with XDG_ACTIVATION_TOKEN", () =>
+    withTempDirectory("t3-quick-composer-test-", (root) =>
+      Effect.gen(function* () {
+        const baseDir = NodePath.join(root, ".t3");
+        const desktop = yield* fakeDesktop({
+          baseDir,
+          reply: (request) => ({
+            version: 1,
+            requestId: request.requestId,
+            ok: true,
+            type: "quick-composer",
+          }),
+        });
+
+        yield* runCli(["quick-composer", "--base-dir", baseDir], {
+          XDG_ACTIVATION_TOKEN: "wayland-token-123",
+        });
+
+        expect(desktop.received).toHaveLength(1);
+        expect(desktop.received[0]).toMatchObject({
+          type: "quick-composer",
+          activationToken: "wayland-token-123",
+        });
+      }).pipe(Effect.scoped),
+    ),
+  );
+
+  it.effect("t3 quick-composer reports DesktopQuickComposerRequestFailedError when disabled", () =>
+    withTempDirectory("t3-quick-composer-disabled-test-", (root) =>
+      Effect.gen(function* () {
+        const baseDir = NodePath.join(root, ".t3");
+        yield* fakeDesktop({
+          baseDir,
+          reply: (request) => ({
+            version: 1,
+            requestId: request.requestId,
+            ok: false,
+            code: "quick-composer-disabled",
+            message: "Quick Composer is disabled.",
+          }),
+        });
+
+        const error = yield* runCli(["quick-composer", "--base-dir", baseDir]).pipe(Effect.flip);
+        expect(error).toMatchObject({
+          _tag: "DesktopQuickComposerRequestFailedError",
+          code: "quick-composer-disabled",
+        });
+      }).pipe(Effect.scoped),
+    ),
   );
 });

@@ -31,6 +31,7 @@ import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPrompt
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkCoordinator";
+import { QuickComposerMainCoordinator } from "../components/desktop/QuickComposerMainCoordinator";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
@@ -173,6 +174,16 @@ function RootRouteBranch() {
     return <Outlet />;
   }
 
+  if (pathname === "/quick-composer") {
+    return (
+      <>
+        <ConfirmDialogHost />
+        <WorktreeLayoutApprovalDialogHost />
+        <Outlet />
+      </>
+    );
+  }
+
   // Handle links before onboarding redirects lose them.
   if (hostedPromptLinkLanding !== null) {
     return hostedPromptLinkLanding;
@@ -193,7 +204,12 @@ function RootRouteBranch() {
           <DesktopWebLinkCoordinator />
         </>
       ) : null}
-      {isElectron ? <RunningThreadKeepAlive /> : null}
+      {isElectron ? (
+        <>
+          <RunningThreadKeepAlive />
+          <QuickComposerMainCoordinator />
+        </>
+      ) : null}
       <RelayClientInstallDialog />
       <ConnectOnboardingDialog />
       <SshPasswordPromptDialog />

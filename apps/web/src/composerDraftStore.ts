@@ -251,6 +251,10 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
   });
 }
 
+export function flushComposerDraftStorage(): void {
+  composerDebouncedStorage.flush();
+}
+
 export const PersistedComposerImageAttachment = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -421,6 +425,7 @@ const PersistedDraftThreadState = Schema.Struct({
     Schema.Struct({ url: Schema.String, branch: Schema.String }),
   ),
   worktreeRepositories: Schema.optionalKey(Schema.Array(Schema.String)),
+  standalone: Schema.optionalKey(Schema.Boolean),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -524,6 +529,8 @@ export interface DraftSessionState {
    * until the user chooses, which leaves the choice to the server's default.
    */
   worktreeRepositories?: ReadonlyArray<string>;
+  /** Standalone drafts (such as Quick Composer) manage their own lifecycle and skip automatic promotion. */
+  standalone?: boolean;
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -616,6 +623,24 @@ interface ComposerDraftStoreState {
       checkoutPullRequest?: DraftCheckoutPullRequest | null;
     },
   ) => void;
+  /** Updates a standalone draft slot (e.g. Quick Composer) without altering per-project mappings. */
+  setStandaloneDraftThread: (
+    draftId: DraftId,
+    projectRef: ScopedProjectRef,
+    options?: {
+      threadId?: ThreadId;
+      branch?: string | null;
+      worktreePath?: string | null;
+      createdAt?: string;
+      envMode?: DraftThreadEnvMode;
+      startFromOrigin?: boolean;
+      runtimeMode?: RuntimeMode;
+      interactionMode?: ProviderInteractionMode;
+      environmentSelection?: "auto" | "manual";
+      loadBalancedEnvironmentId?: EnvironmentId | null;
+    },
+  ) => void;
+  rotateDraftThreadId: (draftId: DraftId, nextThreadId: ThreadId) => void;
   setDraftThreadContext: (
     threadRef: ComposerThreadTarget,
     options: {
@@ -1851,6 +1876,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    Boolean(left.standalone) === Boolean(right.standalone) &&
     checkoutPullRequestsEqual(left.checkoutPullRequest, right.checkoutPullRequest) &&
     worktreeRepositoriesEqual(left.worktreeRepositories, right.worktreeRepositories) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
@@ -2033,6 +2059,7 @@ function normalizePersistedDraftThreads(
               ),
             }
           : {}),
+        ...(candidateDraftThread.standalone === true ? { standalone: true } : {}),
         promotedTo,
       };
     }
@@ -3033,6 +3060,69 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             draftId,
             options,
           );
+        },
+        setStandaloneDraftThread: (draftId, projectRef, options) => {
+          if (draftId.length === 0) return;
+          set((state) => {
+            const existingThread = state.draftThreadsByThreadKey[draftId];
+            const nextDraftThread: DraftThreadState = {
+              ...createDraftThreadState(
+                projectRef,
+                options?.threadId ?? existingThread?.threadId ?? ThreadId.make(draftId),
+                projectDraftKey(projectRef),
+                existingThread,
+                options,
+              ),
+              standalone: true,
+            };
+            if (draftThreadsEqual(existingThread, nextDraftThread)) {
+              return state;
+            }
+            const nextDraftThreadsByThreadKey: Record<string, DraftThreadState> = {
+              ...state.draftThreadsByThreadKey,
+              [draftId]: nextDraftThread,
+            };
+            const existingDraft = state.draftsByThreadKey[draftId];
+            let nextDraftsByThreadKey = state.draftsByThreadKey;
+            if (
+              existingThread &&
+              existingThread.environmentId !== projectRef.environmentId &&
+              existingDraft !== undefined
+            ) {
+              const nextDraft = clearStaleFileUploadMetadata(
+                existingDraft,
+                projectRef.environmentId,
+              );
+              if (nextDraft !== existingDraft) {
+                nextDraftsByThreadKey = {
+                  ...state.draftsByThreadKey,
+                  [draftId]: nextDraft,
+                };
+              }
+            }
+            return {
+              draftsByThreadKey: nextDraftsByThreadKey,
+              draftThreadsByThreadKey: nextDraftThreadsByThreadKey,
+            };
+          });
+        },
+        rotateDraftThreadId: (draftId, nextThreadId) => {
+          if (draftId.length === 0) return;
+          set((state) => {
+            const existing = state.draftThreadsByThreadKey[draftId];
+            if (!existing || existing.threadId === nextThreadId) return state;
+            const { promotedTo: _promotedTo, ...rest } = existing;
+            return {
+              draftThreadsByThreadKey: {
+                ...state.draftThreadsByThreadKey,
+                [draftId]: {
+                  ...rest,
+                  threadId: nextThreadId,
+                  createdAt: new Date().toISOString(),
+                },
+              },
+            };
+          });
         },
         setDraftThreadContext: (threadRef, options) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
@@ -4783,6 +4873,7 @@ export function usePromotingDraftThreadKeys(): ReadonlyArray<string> {
 export function markPromotedDraftThreadByRef(threadRef: ScopedThreadRef): void {
   const draftStore = useComposerDraftStore.getState();
   for (const [draftId, draftThread] of Object.entries(draftStore.draftThreadsByThreadKey)) {
+    if (draftThread.standalone) continue;
     if (
       draftThread.environmentId === threadRef.environmentId &&
       draftThread.threadId === threadRef.threadId
@@ -4813,6 +4904,7 @@ export function restoreFailedDraftThread(
 export function finalizePromotedDraftThreadByRef(threadRef: ScopedThreadRef): void {
   const draftStore = useComposerDraftStore.getState();
   for (const [draftId, draftThread] of Object.entries(draftStore.draftThreadsByThreadKey)) {
+    if (draftThread.standalone) continue;
     const promotedRef = draftThread.promotedTo;
     const matches = promotedRef
       ? promotedRef.environmentId === threadRef.environmentId &&
@@ -4885,6 +4977,7 @@ export function subscribeDraftThreadPromotion(input: {
     const arrived: Array<readonly [DraftId, ScopedThreadRef]> = [];
     const owned: Array<readonly [DraftId, ScopedThreadRef]> = [];
     for (const [draftId, draftThread] of Object.entries(state.draftThreadsByThreadKey)) {
+      if (draftThread.standalone) continue;
       const ref =
         draftThread.promotedTo ?? scopeThreadRef(draftThread.environmentId, draftThread.threadId);
       const threadKey = scopedThreadKey(ref);

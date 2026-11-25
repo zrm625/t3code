@@ -358,3 +358,54 @@ it("uses the environment's model preferences after migration, including empty li
   expect(merged.favorites).toEqual([]);
   expect(merged.providerModelPreferences).toEqual({});
 });
+
+it("refreshes client settings from desktop broadcasts before subsequent writes", async () => {
+  let broadcastListener: ((settings: ClientSettings) => void) | undefined;
+  const originalWindow = globalThis.window;
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      desktopBridge: {
+        onClientSettingsChanged: (listener: (settings: ClientSettings) => void) => {
+          broadcastListener = listener;
+          return () => {
+            broadcastListener = undefined;
+          };
+        },
+      },
+    },
+  });
+  try {
+    await ensureClientSettingsHydrated();
+    expect(broadcastListener).toBeDefined();
+
+    const updatedFromMain = {
+      ...DEFAULT_CLIENT_SETTINGS,
+      quickComposerEnabled: true,
+      quickComposerAutoVoice: true,
+    };
+    broadcastListener!(updatedFromMain);
+
+    await persistClientSettingsPatch({ wordWrap: false });
+    expect(getClientSettings()).toMatchObject({
+      quickComposerEnabled: true,
+      quickComposerAutoVoice: true,
+      wordWrap: false,
+    });
+    expect(persistenceMocks.setClientSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        quickComposerEnabled: true,
+        quickComposerAutoVoice: true,
+        wordWrap: false,
+      }),
+    );
+  } finally {
+    __resetClientSettingsPersistenceForTests();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: originalWindow,
+    });
+  }
+});

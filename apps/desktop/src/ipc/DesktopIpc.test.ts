@@ -9,11 +9,18 @@ vi.mock("electron", () => ({}));
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
 
-it.effect("answers only the main window's top frame", () =>
+it.effect("answers trusted app windows' top frames and rejects subframes and guests", () =>
   Effect.gen(function* () {
     const mainFrame = {};
+    const quickComposerMainFrame = {};
     const invoke = new Map<string, DesktopIpc.DesktopIpcHandleListener>();
     const sync = new Map<string, DesktopIpc.DesktopIpcSyncListener>();
+    const mainWindow = {
+      webContents: { id: 1, mainFrame },
+    } as unknown as Electron.BrowserWindow;
+    const quickComposerWindow = {
+      webContents: { id: 3, mainFrame: quickComposerMainFrame },
+    } as unknown as Electron.BrowserWindow;
     const ipc = yield* DesktopIpc.DesktopIpc.pipe(
       Effect.provide(
         DesktopIpc.layer({
@@ -24,9 +31,8 @@ it.effect("answers only the main window's top frame", () =>
         }).pipe(
           Layer.provide(
             Layer.mock(ElectronWindow.ElectronWindow, {
-              main: Effect.succeedSome({
-                webContents: { id: 1, mainFrame },
-              } as unknown as Electron.BrowserWindow),
+              main: Effect.succeedSome(mainWindow),
+              trustedAppWindows: Effect.succeed([mainWindow, quickComposerWindow]),
             }),
           ),
         ),
@@ -45,6 +51,8 @@ it.effect("answers only the main window's top frame", () =>
     const senders = {
       app: { sender: { id: 1 }, senderFrame: mainFrame },
       appSubframe: { sender: { id: 1 }, senderFrame: {} },
+      quickComposer: { sender: { id: 3 }, senderFrame: quickComposerMainFrame },
+      quickComposerSubframe: { sender: { id: 3 }, senderFrame: {} },
       previewGuest: { sender: { id: 2 }, senderFrame: {} },
     };
     const results: Record<string, unknown> = {};
@@ -61,6 +69,8 @@ it.effect("answers only the main window's top frame", () =>
     assert.deepEqual(results, {
       app: ["secret", "secret"],
       appSubframe: ["rejected", undefined],
+      quickComposer: ["secret", "secret"],
+      quickComposerSubframe: ["rejected", undefined],
       previewGuest: ["rejected", undefined],
     });
   }),

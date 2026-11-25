@@ -78,6 +78,20 @@ export class DesktopAppRequestFailedError extends Schema.TaggedError<DesktopAppR
   }
 }
 
+export class DesktopQuickComposerRequestFailedError extends Schema.TaggedError<DesktopQuickComposerRequestFailedError>()(
+  "DesktopQuickComposerRequestFailedError",
+  {
+    code: DesktopAppActivationErrorCode,
+    requestId: Schema.String,
+    detail: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `${this.detail} (${this.code})`;
+  }
+}
+
 function isDesktopPlatform(platform: NodeJS.Platform): platform is DesktopAppActivationPlatform {
   return platform === "darwin" || platform === "linux" || platform === "win32";
 }
@@ -195,6 +209,10 @@ const appEnvironment = Config.all({
   t3Home: Config.String("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   sshConnection: Config.String("SSH_CONNECTION").pipe(Config.option),
   sshTty: Config.String("SSH_TTY").pipe(Config.option),
+  xdgActivationToken: Config.String("XDG_ACTIVATION_TOKEN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 const runAppCommand = Effect.fn("cli.app")(function* (flags: {
@@ -278,4 +296,78 @@ export const appCommand = Command.make("app", {
 }).pipe(
   Command.withDescription("Open a project in the running T3 Code desktop app."),
   Command.withHandler(runAppCommand),
+);
+
+const runQuickComposerCommand = Effect.fn("cli.quickComposer")(function* (flags: {
+  readonly baseDir: Option.Option<string>;
+}) {
+  const environment = yield* appEnvironment;
+  const hostPlatform = yield* HostProcess.Platform;
+  if (Option.isSome(environment.sshConnection) || Option.isSome(environment.sshTty)) {
+    return yield* new DesktopAppSshUnsupportedError({});
+  }
+  if (!isDesktopPlatform(hostPlatform)) {
+    return yield* new DesktopAppPlatformUnsupportedError({ platform: hostPlatform });
+  }
+
+  const path = yield* Path.Path;
+  const configuredBaseDir = Option.getOrUndefined(flags.baseDir) ?? environment.t3Home;
+  const baseDir = yield* resolveBaseDir(configuredBaseDir);
+  const allowDevFallback = Option.isNone(flags.baseDir) && !environment.t3Home?.trim();
+  const userId = yield* HostProcess.UserId;
+  const resolveAddress = (stateSubdirectory: "userdata" | "dev") =>
+    resolveDesktopAppControlAddress({
+      stateDir: path.join(baseDir, stateSubdirectory),
+      platform: hostPlatform,
+      tempDir: NodeOS.tmpdir(),
+      userId,
+      joinPath: path.join,
+    });
+  const random = yield* SecureRandom.SecureRandom;
+  const requestId = yield* random.uuidV4();
+  const activationToken = environment.xdgActivationToken?.trim();
+  const request: DesktopAppActivationRequest = {
+    version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+    requestId,
+    type: "quick-composer",
+    platform: hostPlatform,
+    ...(activationToken ? { activationToken } : {}),
+  };
+  const address = resolveAddress("userdata");
+  const fallbackAddress = allowDevFallback ? resolveAddress("dev") : undefined;
+
+  const response = yield* Effect.tryPromise({
+    try: () =>
+      sendDesktopAppActivationRequest({
+        address,
+        userId,
+        ...(fallbackAddress === undefined ? {} : { fallbackAddress }),
+        request,
+      }),
+    catch: (cause) =>
+      new DesktopAppUnreachableError({
+        candidateAddresses:
+          fallbackAddress === undefined
+            ? [address.address]
+            : [address.address, fallbackAddress.address],
+        requestId: request.requestId,
+        workspaceRoot: "quick-composer",
+        cause,
+      }),
+  });
+  if (!response.ok) {
+    return yield* new DesktopQuickComposerRequestFailedError({
+      code: response.code,
+      requestId: response.requestId,
+      detail: response.message,
+      cause: response,
+    });
+  }
+});
+
+export const quickComposerCommand = Command.make("quick-composer", {
+  baseDir: baseDirFlag,
+}).pipe(
+  Command.withDescription("Toggle the Quick Composer window in the running T3 Code desktop app."),
+  Command.withHandler(runQuickComposerCommand),
 );

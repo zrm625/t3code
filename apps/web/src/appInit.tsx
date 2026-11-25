@@ -256,15 +256,19 @@ function startThreadOverlayRetention(router: AppRouter): void {
 }
 
 /**
- * Starts every app-lifetime service once, before the first render, and returns the router.
+ * Starts every app-lifetime service once, before the first render.
  * They run for the life of the page, so their disposers are dropped here.
  */
-export function startAppServices(): AppRouter {
+export function startAppServices(): {
+  readonly router: AppRouter;
+  readonly isQuickComposerSurface: boolean;
+} {
   // Ahead of the history: the provider auth code must leave the address before anything reads it.
   startProviderAuthDelivery();
 
   // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
   const router = getRouter(isElectron ? createHashHistory() : createBrowserHistory());
+  const isQuickComposerSurface = router.history.location.pathname === "/quick-composer";
 
   if (isElectron) {
     syncDocumentElectronPlatformClasses(navigator.platform);
@@ -276,7 +280,6 @@ export function startAppServices(): AppRouter {
 
   startClientAppearance();
   startI18n();
-  startDocumentTitle(router);
   startHostEnvironmentLookup();
   appAtomRegistry.subscribe(primaryRelayTracingAllowedAtom, setServerRelayTelemetry, {
     immediate: true,
@@ -285,21 +288,6 @@ export function startAppServices(): AppRouter {
   startThemeBackground();
   startBrowserChromeThemeSync(router);
   startDefaultThemeAdoption();
-  startModelPreferencesMigration();
-  startAgentOpenedPreviews();
-  if (isElectron) startElectronBrowserHost();
-  startPreviewTitleRecording();
-  startBrowserProfileReporting();
-  installChatRouteCommands(router);
-  installCommandPaletteCommands(router);
-  registerOpenFavoriteEditorCommand();
-  startThreadOverlayRetention(router);
-  // Drafts promote as their server threads arrive, wherever the user is.
-  subscribeDraftThreadPromotion({
-    registry: appAtomRegistry,
-    threadShellAtom: environmentThreadShells.quietThreadShellAtom,
-    threadRefsAtom: environmentThreadShells.threadRefsAtom,
-  });
   subscribeComposerDraftModelReconciliation({
     registry: appAtomRegistry,
     threadShellAtom: environmentThreadShells.threadShellAtom,
@@ -307,20 +295,41 @@ export function startAppServices(): AppRouter {
     shellStateAtom: environmentShell.stateAtom,
     pendingThreadIdsAtom: threadEnvironment.pendingThreadIdsAtom,
   });
-  startMainAppLocationTracking(router);
-  startWorkspaceFocus(router);
-  startBackgroundThreadAnnouncements(appAtomRegistry, router);
-  startThreadVisitedMigration(appAtomRegistry);
-  startSshPasswordPromptQueue();
 
-  startKeybindingsUpdateToasts();
-  startSlowRpcRequestToasts();
-  startHostFreezeToasts();
-  startLegacyThreadMigrationToast();
-  startPermissionUpdateNotices(router);
-  startThreadNotifications(appAtomRegistry, router);
-  startGuideRunNotifications(appAtomRegistry, router);
-  if (isElectron) startDesktopUpdateLaunchNotice();
+  // Main-window singletons (notifications, badge updates, browser host, draft promotion)
+  // stay owned by the primary renderer so a hidden Quick Composer never duplicates them.
+  if (!isQuickComposerSurface) {
+    startDocumentTitle(router);
+    startModelPreferencesMigration();
+    startAgentOpenedPreviews();
+    if (isElectron) startElectronBrowserHost();
+    startPreviewTitleRecording();
+    startBrowserProfileReporting();
+    installChatRouteCommands(router);
+    installCommandPaletteCommands(router);
+    registerOpenFavoriteEditorCommand();
+    startThreadOverlayRetention(router);
+    // Drafts promote as their server threads arrive, wherever the user is.
+    subscribeDraftThreadPromotion({
+      registry: appAtomRegistry,
+      threadShellAtom: environmentThreadShells.quietThreadShellAtom,
+      threadRefsAtom: environmentThreadShells.threadRefsAtom,
+    });
+    startMainAppLocationTracking(router);
+    startWorkspaceFocus(router);
+    startBackgroundThreadAnnouncements(appAtomRegistry, router);
+    startThreadVisitedMigration(appAtomRegistry);
+    startSshPasswordPromptQueue();
 
-  return router;
+    startKeybindingsUpdateToasts();
+    startSlowRpcRequestToasts();
+    startHostFreezeToasts();
+    startLegacyThreadMigrationToast();
+    startPermissionUpdateNotices(router);
+    startThreadNotifications(appAtomRegistry, router);
+    startGuideRunNotifications(appAtomRegistry, router);
+    if (isElectron) startDesktopUpdateLaunchNotice();
+  }
+
+  return { router, isQuickComposerSurface };
 }
