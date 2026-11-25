@@ -535,6 +535,13 @@ export interface DraftSessionState {
   promotedTo?: ScopedThreadRef | null;
 }
 
+/** Draft sessions exposed through the project sidebar. */
+export function isSidebarDraftSession(
+  session: DraftSessionState | undefined,
+): session is DraftSessionState {
+  return session !== undefined && session.promotedTo == null && !session.standalone;
+}
+
 export type DraftThreadState = DraftSessionState;
 
 export interface DraftCheckoutPullRequest {
@@ -3092,20 +3099,20 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             };
             const existingDraft = state.draftsByThreadKey[draftId];
             let nextDraftsByThreadKey = state.draftsByThreadKey;
-            if (
-              existingThread &&
-              existingThread.environmentId !== projectRef.environmentId &&
-              existingDraft !== undefined
-            ) {
-              const nextDraft = clearStaleFileUploadMetadata(
-                existingDraft,
-                projectRef.environmentId,
-              );
+            if (existingThread && existingDraft) {
+              const environmentChanged = existingThread.environmentId !== projectRef.environmentId;
+              const projectChanged =
+                environmentChanged || existingThread.projectId !== projectRef.projectId;
+              let nextDraft = environmentChanged
+                ? clearStaleFileUploadMetadata(existingDraft, projectRef.environmentId)
+                : existingDraft;
+              if (projectChanged && nextDraft.runtimeMode !== null) {
+                nextDraft = { ...nextDraft, runtimeMode: null };
+              }
               if (nextDraft !== existingDraft) {
-                nextDraftsByThreadKey = {
-                  ...state.draftsByThreadKey,
-                  [draftId]: nextDraft,
-                };
+                nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+                if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[draftId];
+                else nextDraftsByThreadKey[draftId] = nextDraft;
               }
             }
             return {
@@ -3212,6 +3219,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               startFromOrigin: nextStartFromOrigin,
               ...(checkoutPullRequest ? { checkoutPullRequest } : {}),
               ...(worktreeRepositories ? { worktreeRepositories } : {}),
+              ...(existing.standalone ? { standalone: true } : {}),
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =

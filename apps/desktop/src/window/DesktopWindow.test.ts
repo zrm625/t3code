@@ -309,11 +309,6 @@ function layerTest(input: {
         Effect.as(input.window),
       ),
     main: Ref.get(input.mainWindow),
-    trustedAppWindows: Ref.get(input.mainWindow).pipe(
-      Effect.map((window) => (Option.isSome(window) ? [window.value] : [])),
-    ),
-    isTrustedAppWebContentsId: (webContentsId) =>
-      Effect.succeed(input.window.webContents.id === webContentsId),
     currentMainOrFirst: Ref.get(input.mainWindow).pipe(
       Effect.map(Option.orElse(() => Option.fromNullishOr(input.fallbackWindow ?? null))),
     ),
@@ -323,7 +318,6 @@ function layerTest(input: {
         : Effect.succeedSome(input.focusedWindow),
     setMain: (window) => Ref.set(input.mainWindow, Option.some(window)),
     clearMain: () => Ref.set(input.mainWindow, Option.none()),
-    onMainCleared: () => Effect.void,
     prepareReveal: () => Effect.succeed(false),
     reveal: (window) => Effect.sync(() => input.onReveal?.(window)),
     sendAll: () => Effect.void,
@@ -451,15 +445,10 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
           return outcome;
         }),
       main: Ref.get(mainWindow),
-      trustedAppWindows: Ref.get(mainWindow).pipe(
-        Effect.map((window) => (Option.isSome(window) ? [window.value] : [])),
-      ),
-      isTrustedAppWebContentsId: () => Effect.succeed(false),
       currentMainOrFirst,
       focusedMainOrFirst: currentMainOrFirst,
       setMain: (window) => Ref.set(mainWindow, Option.some(window)),
       clearMain: () => Ref.set(mainWindow, Option.none()),
-      onMainCleared: () => Effect.void,
       prepareReveal: () => Effect.succeed(false),
       reveal: (window) => Ref.update(revealedWindows, (windows) => [...windows, window]),
       sendAll: () => Effect.void,

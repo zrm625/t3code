@@ -188,7 +188,6 @@ function runWithService<A, E>(
 
       const createdWindows: Array<ReturnType<typeof makeFakeWindow>> = [];
       const openedThreads: Array<DesktopQuickComposerOpenThreadInput> = [];
-      const mainClearedListeners: Array<() => void> = [];
       const quitting = yield* Ref.make(false);
 
       const service = yield* DesktopQuickComposer.make.pipe(
@@ -215,16 +214,10 @@ function runWithService<A, E>(
               return created.window;
             }),
           main: Effect.succeedNone,
-          trustedAppWindows: Effect.succeed([]),
-          isTrustedAppWebContentsId: () => Effect.succeed(false),
           currentMainOrFirst: Effect.succeedNone,
           focusedMainOrFirst: Effect.succeedNone,
           setMain: () => Effect.void,
           clearMain: () => Effect.void,
-          onMainCleared: (listener) =>
-            Effect.sync(() => {
-              mainClearedListeners.push(listener);
-            }),
           prepareReveal: () => Effect.succeed(false),
           reveal: () => Effect.void,
           sendAll: () => Effect.void,
@@ -239,12 +232,12 @@ function runWithService<A, E>(
         Effect.provideService(ElectronShell.ElectronShell, {
           openExternal: () => Effect.succeed(true),
         } as unknown as ElectronShell.ElectronShell["Service"]),
-        Effect.provideService(DesktopWindow.DesktopWindow, {
-          dispatchQuickComposerOpenThread: (input: DesktopQuickComposerOpenThreadInput) =>
+        Effect.provideService(DesktopWindow.DesktopThreadNavigation, {
+          open: (input) =>
             Effect.sync(() => {
               openedThreads.push(input);
             }),
-        } as unknown as DesktopWindow.DesktopWindow["Service"]),
+        }),
         Effect.provideService(DesktopRendererHistory.DesktopRendererHistory, {
           register: () => Effect.void,
           recordMetrics: () => Effect.void,
@@ -256,9 +249,7 @@ function runWithService<A, E>(
         service,
         createdWindows,
         openedThreads,
-        triggerMainCleared: () => {
-          for (const listener of mainClearedListeners) listener();
-        },
+        triggerMainCleared: ElectronWindow.closeAppWindowsWithMain,
       });
     }),
   );

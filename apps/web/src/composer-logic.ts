@@ -103,32 +103,6 @@ export function composerSubmissionIntentForKey(input: {
   return "foreground";
 }
 
-type QuickComposerKeyEvent = Pick<
-  KeyboardEvent,
-  "key" | "shiftKey" | "metaKey" | "ctrlKey" | "altKey" | "isComposing" | "repeat"
->;
-
-/** Mod+Shift+Enter is Quick Composer's Send and open. */
-export function isQuickComposerOpenShortcut(event: QuickComposerKeyEvent): boolean {
-  return (
-    event.key === "Enter" &&
-    event.shiftKey &&
-    (event.metaKey || event.ctrlKey) &&
-    !event.altKey &&
-    !event.isComposing &&
-    !event.repeat
-  );
-}
-
-/** Quick Composer sends stay in the background; only its Send and open shortcut shows the thread. */
-export function quickComposerSubmissionIntent(
-  event: QuickComposerKeyEvent | null,
-  intent: ComposerSubmissionIntent | null,
-): ComposerSubmissionIntent | null {
-  if (event !== null && isQuickComposerOpenShortcut(event)) return "foreground";
-  return intent === "foreground" ? "background" : intent;
-}
-
 function clampCursor(text: string, cursor: number): number {
   if (!Number.isFinite(cursor)) return text.length;
   return Math.max(0, Math.min(text.length, Math.floor(cursor)));

@@ -149,7 +149,12 @@ export function resolveDraftWorkspaceDefaults(
       });
     pendingWorkspaceDefaults.set(draftId, { ...provisional, settled });
   };
-  return { envMode, startFromOrigin, applyProjectFile };
+  return {
+    envMode,
+    startFromOrigin,
+    runtimeMode: projectSettings.settings.defaultRuntimeMode,
+    applyProjectFile,
+  };
 }
 
 export function setStandaloneDraftProject(draftId: DraftId, projectRef: ScopedProjectRef): void {
@@ -159,7 +164,7 @@ export function setStandaloneDraftProject(draftId: DraftId, projectRef: ScopedPr
     return;
 
   const config = appAtomRegistry.get(environmentServerConfigsAtom).get(projectRef.environmentId);
-  const { envMode, startFromOrigin, applyProjectFile } = resolveDraftWorkspaceDefaults(
+  const { envMode, startFromOrigin, runtimeMode, applyProjectFile } = resolveDraftWorkspaceDefaults(
     projectRef,
     readProject(projectRef) ?? undefined,
     config,
@@ -169,6 +174,7 @@ export function setStandaloneDraftProject(draftId: DraftId, projectRef: ScopedPr
     ...(draft === null ? { threadId: newThreadId() } : {}),
     envMode,
     startFromOrigin,
+    runtimeMode,
     environmentSelection: "auto",
   });
   applyProjectFile(draftId);

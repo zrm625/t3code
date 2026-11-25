@@ -361,13 +361,13 @@ export const showContextMenu = DesktopIpc.makeIpcMethod({
     const electronMenu = yield* ElectronMenu.ElectronMenu;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
     const senderWindow =
-      event !== undefined && typeof electronWindow.trustedAppWindows !== "undefined"
-        ? Option.fromNullishOr(
-            (yield* electronWindow.trustedAppWindows).find(
+      event === undefined
+        ? Option.none<Electron.BrowserWindow>()
+        : Option.fromNullishOr(
+            ElectronWindow.trustedAppWindows(yield* electronWindow.main).find(
               (candidate) => candidate.webContents.id === event.sender.id,
-            ) ?? null,
-          )
-        : Option.none<Electron.BrowserWindow>();
+            ),
+          );
     const window = Option.isSome(senderWindow)
       ? senderWindow
       : yield* electronWindow.focusedMainOrFirst;
@@ -518,13 +518,14 @@ export const revealWindow = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.window.revealWindow")(function* (_input, event) {
     const electronWindow = yield* ElectronWindow.ElectronWindow;
-    if (
-      event === undefined ||
-      !(yield* electronWindow.isTrustedAppWebContentsId(event.sender.id))
-    ) {
-      return;
-    }
+    if (event === undefined) return;
     const window = yield* electronWindow.main;
+    if (
+      !ElectronWindow.trustedAppWindows(window).some(
+        (candidate) => candidate.webContents.id === event.sender.id,
+      )
+    )
+      return;
     if (Option.isSome(window)) {
       yield* electronWindow.reveal(window.value);
       return;

@@ -9,7 +9,6 @@ import {
 } from "react";
 import { msg, useGT, useMessages } from "gt-react";
 import {
-  ArrowUpRightIcon,
   CheckIcon,
   ChevronLeftIcon,
   Minimize2Icon,
@@ -71,14 +70,16 @@ interface ComposerPrimaryActionsProps {
   hideCompactToggle?: boolean;
   keepFullHistory?: boolean;
   onToggleKeepFullHistory?: () => void;
-  /** Quick Composer pairs Send with Send and open; both share the send's eligibility. */
-  sendAndOpen?: QuickComposerSendAndOpen | null;
-}
-
-export interface QuickComposerSendAndOpen {
-  readonly sendShortcutLabel: string;
-  readonly shortcutLabel: string;
-  readonly onSubmit: () => void;
+  sendPresentation?: {
+    readonly label: string;
+    readonly tooltip: string;
+    readonly renderSecondaryAction: (state: {
+      readonly disabled: boolean;
+      readonly status: string | null;
+      readonly statusId: string | undefined;
+      readonly onPointerDown: PointerEventHandler<HTMLButtonElement> | undefined;
+    }) => ReactNode;
+  };
 }
 
 const formatPendingPrimaryActionLabel = (
@@ -272,7 +273,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   hideCompactToggle = false,
   keepFullHistory = false,
   onToggleKeepFullHistory,
-  sendAndOpen = null,
+  sendPresentation,
 }: ComposerPrimaryActionsProps) {
   const gt = useGT();
   const m = useMessages();
@@ -404,8 +405,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
 
   const submitLabel = showResume
     ? gt("Resume thread")
-    : sendAndOpen
-      ? gt("Send", { $context: "verb, sends the message without opening T3 Code" })
+    : sendPresentation
+      ? sendPresentation.label
       : isEditingQueuedMessage
         ? gt("Update queued message")
         : compactsBeforeSend
@@ -448,9 +449,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       ? gt("Summarize {tokens} tokens of history, then send", { tokens: compactTokens })
       : isRunning && !isEditingQueuedMessage && canSteer
         ? dispatchTooltip
-        : sendAndOpen
-          ? gt("Send in background ({shortcut})", { shortcut: sendAndOpen.sendShortcutLabel })
-          : submitLabel);
+        : (sendPresentation?.tooltip ?? submitLabel));
 
   const isBusyOrHeld = isSendBusy || isSendHeld;
   const sendActionDisabled =
@@ -477,9 +476,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         else onSubmitMessage?.(event);
       }}
       disabled={sendActionDisabled}
-      // The paired Quick Composer buttons keep their names and share the status as a description.
-      aria-label={sendAndOpen ? submitLabel : (submitStatus ?? submitLabel)}
-      aria-describedby={sendAndOpen && submitStatus ? sendStatusId : undefined}
+      aria-label={sendPresentation ? submitLabel : (submitStatus ?? submitLabel)}
+      aria-describedby={sendPresentation && submitStatus ? sendStatusId : undefined}
       aria-busy={isBusyOrHeld || undefined}
     >
       {stageBackdropVariant ? (
@@ -514,36 +512,19 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const submit = (
     <Tooltip key="submit">
       <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
-      <TooltipPopup align={sendAndOpen ? "end" : "center"}>{submitTooltip}</TooltipPopup>
+      <TooltipPopup align={sendPresentation ? "end" : "center"}>{submitTooltip}</TooltipPopup>
     </Tooltip>
   );
-  const sendAndOpenAction =
-    sendAndOpen && !showResume ? (
-      <Tooltip key="send-and-open">
-        <TooltipTrigger render={<span className="inline-flex" />}>
-          <Button
-            type="button"
-            size="compact"
-            variant="outline"
-            {...pointerFocusProps}
-            disabled={sendActionDisabled}
-            aria-label={gt("Send and open in T3 Code")}
-            aria-describedby={submitStatus ? sendStatusId : undefined}
-            onClick={sendAndOpen.onSubmit}
-          >
-            <ArrowUpRightIcon aria-hidden="true" />
-            {/* The narrowest Quick Composer window (460px) leaves a 436px surface, so the label stays. */}
-            <span className="@max-[400px]/composer-surface:hidden">{gt("Send and open")}</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipPopup align="end">
-          {submitStatus ??
-            gt("Send and open in T3 Code ({shortcut})", { shortcut: sendAndOpen.shortcutLabel })}
-        </TooltipPopup>
-      </Tooltip>
-    ) : null;
+  const secondaryAction = !showResume
+    ? sendPresentation?.renderSecondaryAction({
+        disabled: sendActionDisabled,
+        status: submitStatus,
+        statusId: submitStatus ? sendStatusId : undefined,
+        onPointerDown: pointerFocusProps?.onPointerDown,
+      })
+    : null;
   const sendStatus =
-    sendAndOpen && submitStatus ? (
+    sendPresentation && submitStatus ? (
       <span key="send-status" id={sendStatusId} className="sr-only">
         {submitStatus}
       </span>
@@ -552,7 +533,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     return withStopButton(
       <>
         {children}
-        {sendAndOpenAction}
+        {secondaryAction}
         {submit}
         {sendStatus}
       </>,
@@ -597,7 +578,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </TooltipPopup>
       </Tooltip>
       {children}
-      {sendAndOpenAction}
+      {secondaryAction}
       {submit}
       {sendStatus}
     </div>,

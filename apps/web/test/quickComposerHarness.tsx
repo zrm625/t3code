@@ -71,7 +71,7 @@ export async function renderQuickComposerWindow() {
   });
   const router = getRouter(createMemoryHistory({ initialEntries: ["/quick-composer"] }));
   await router.load();
-  return render(<AppRoot router={router} isQuickComposerSurface />, {
+  return render(<AppRoot router={router} />, {
     // AppRoot brings its own router.
     router: false,
   });

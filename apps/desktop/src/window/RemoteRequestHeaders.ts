@@ -150,13 +150,17 @@ const sessionHeaderPolicyLeases = new WeakMap<
 export function acquireTrustedAppRemoteRequestHeaderPolicy(
   session: Pick<Electron.Session, "webRequest">,
   ownerWebContentsId: number,
-  policy: MainWindowRequestHeaderPolicy,
+  policy: Omit<MainWindowRequestHeaderPolicy, "mainWebContentsId" | "isAllowedWebContentsId">,
 ): () => void {
   let lease = sessionHeaderPolicyLeases.get(session);
   if (lease === undefined) {
+    const owners = new Set<number>();
     lease = {
-      owners: new Set(),
-      detach: installMainWindowRemoteRequestHeaderPolicy(session, policy),
+      owners,
+      detach: installMainWindowRemoteRequestHeaderPolicy(session, {
+        ...policy,
+        isAllowedWebContentsId: (id) => owners.has(id),
+      }),
     };
     sessionHeaderPolicyLeases.set(session, lease);
   }

@@ -6,7 +6,6 @@ import { cn } from "~/lib/utils";
 
 const alertVariants = cva("relative rounded-xl border px-3.5 py-3 text-card-foreground text-sm", {
   defaultVariants: {
-    size: "default",
     surface: "default",
     variant: "default",
   },
@@ -25,10 +24,6 @@ const alertVariants = cva("relative rounded-xl border px-3.5 py-3 text-card-fore
       success: "border-success/32 bg-success/4 [&_svg]:text-success",
       warning:
         "border-warning/32 bg-warning-surface text-warning-foreground [&_[data-slot=alert-description]]:text-warning-foreground/80 [&_svg]:text-warning",
-    },
-    size: {
-      default: "",
-      sm: "rounded-lg px-2.5 py-1 text-xs",
     },
   },
 });
@@ -56,7 +51,6 @@ function Alert({
   className,
   variant,
   surface,
-  size,
   controlAlignment = "center",
   children,
   ...props
@@ -85,7 +79,7 @@ function Alert({
 
   return (
     <div
-      className={cn(alertVariants({ size, surface, variant }), className)}
+      className={cn(alertVariants({ surface, variant }), className)}
       data-slot="alert"
       data-variant={variant ?? "default"}
       role="alert"

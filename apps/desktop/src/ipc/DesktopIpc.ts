@@ -1,7 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
@@ -186,14 +185,7 @@ export const layer = (ipcMain: DesktopIpcMain) =>
       const electronWindow = yield* ElectronWindow.ElectronWindow;
       return make(ipcMain, (event) =>
         Effect.gen(function* () {
-          // Test mocks may only provide `main`; real services provide `trustedAppWindows`.
-          const windows =
-            typeof electronWindow.trustedAppWindows !== "undefined"
-              ? yield* electronWindow.trustedAppWindows
-              : Option.match(yield* electronWindow.main, {
-                  onNone: () => [],
-                  onSome: (window) => [window],
-                });
+          const windows = ElectronWindow.trustedAppWindows(yield* electronWindow.main);
           return windows.some(
             (window) =>
               window.webContents.id === event.sender.id &&

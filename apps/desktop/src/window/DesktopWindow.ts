@@ -150,15 +150,21 @@ export class DesktopWindow extends Context.Service<
     readonly dispatchSnapShotEvent: (
       event: DesktopSnapShotEvent,
     ) => Effect.Effect<void, DesktopWindowError>;
-    readonly dispatchQuickComposerOpenThread: (
-      input: DesktopQuickComposerOpenThreadInput,
-    ) => Effect.Effect<void, DesktopWindowError>;
     // Electron zoom roles target focused guests; zoomMain must always target the app.
     readonly zoomMain: (direction: MainWindowZoomDirection) => Effect.Effect<void>;
     readonly runMainContentsCommand: (command: MainWindowContentsCommand) => Effect.Effect<void>;
     readonly syncAppearance: Effect.Effect<void>;
   }
 >()("@t3tools/desktop/window/DesktopWindow") {}
+
+export class DesktopThreadNavigation extends Context.Service<
+  DesktopThreadNavigation,
+  {
+    readonly open: (
+      input: DesktopQuickComposerOpenThreadInput,
+    ) => Effect.Effect<void, DesktopWindowError>;
+  }
+>()("@t3tools/desktop/window/DesktopWindow/DesktopThreadNavigation") {}
 
 const { logInfo: logWindowInfo, logWarning: logWindowWarning } =
   makeComponentLogger("desktop-window");
@@ -398,7 +404,7 @@ function bindFirstRevealTrigger(
 }
 
 /** @public */
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopState = yield* DesktopState.DesktopState;
   const assets = yield* DesktopAssets.DesktopAssets;
@@ -420,7 +426,6 @@ export const make = Effect.gen(function* () {
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
-  const runSync = Effect.runSyncWith(context);
   const mainWindowMutex = yield* Semaphore.make(1);
   const pendingMainReveals = new WeakMap<Electron.BrowserWindow, Effect.Effect<void>>();
   const revealMain = Effect.fn("desktop.window.revealMain")((window: Electron.BrowserWindow) =>
@@ -1067,8 +1072,6 @@ export const make = Effect.gen(function* () {
       window.webContents.id,
       {
         desktopOrigin: getDesktopOrigin(environment.isDevelopment),
-        isAllowedWebContentsId: (webContentsId) =>
-          runSync(electronWindow.isTrustedAppWebContentsId(webContentsId)),
         clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,
         devServerOrigin: Option.getOrUndefined(
           Option.map(environment.devServerUrl, (url) => url.origin),
@@ -1229,7 +1232,7 @@ export const make = Effect.gen(function* () {
     yield* dispatch;
   });
 
-  return DesktopWindow.of({
+  const desktopWindow = DesktopWindow.of({
     createMain: createMain.pipe(Effect.flatMap(requireWindow)),
     ensureMain: ensureMain.pipe(Effect.flatMap(requireWindow)),
     revealOrCreateMain,
@@ -1287,15 +1290,6 @@ export const make = Effect.gen(function* () {
         reveal: event.type === "started",
       });
     }),
-    dispatchQuickComposerOpenThread: Effect.fn("desktop.window.dispatchQuickComposerOpenThread")(
-      function* (input) {
-        yield* Effect.annotateCurrentSpan({
-          environmentId: input.environmentId,
-          threadId: input.threadId,
-        });
-        yield* dispatchRendererEvent(QUICK_COMPOSER_OPEN_THREAD_CHANNEL, input, { reveal: true });
-      },
-    ),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });
       const window = yield* electronWindow.main;
@@ -1321,6 +1315,17 @@ export const make = Effect.gen(function* () {
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
   });
+  return Context.make(DesktopWindow, desktopWindow).pipe(
+    Context.add(DesktopThreadNavigation, {
+      open: Effect.fn("desktop.window.openThread")(function* (input) {
+        yield* Effect.annotateCurrentSpan({
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+        });
+        yield* dispatchRendererEvent(QUICK_COMPOSER_OPEN_THREAD_CHANNEL, input);
+      }),
+    }),
+  );
 });
 
-export const layer = Layer.effect(DesktopWindow, make);
+export const layer = Layer.effectContext(make);

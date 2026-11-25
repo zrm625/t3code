@@ -14,8 +14,14 @@ import {
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 import { T, useGT } from "gt-react";
-import { ChevronDownIcon, MessageSquareDashedIcon, WifiOffIcon, XIcon } from "lucide-react";
-import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  ArrowUpRightIcon,
+  ChevronDownIcon,
+  MessageSquareDashedIcon,
+  WifiOffIcon,
+  XIcon,
+} from "lucide-react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   composerDraftHasUserContent,
@@ -23,6 +29,9 @@ import {
   QUICK_COMPOSER_DRAFT_ID,
   useComposerDraftStore,
 } from "../../composerDraftStore";
+import { collapseExpandedComposerCursor } from "../../composer-logic";
+import { formatShortcutLabel } from "../../keybindings";
+import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
 import { newThreadId } from "../../lib/utils";
 import { setStandaloneDraftProject } from "../../lib/draftWorkspaceDefaults";
 import { seedDraftModelSelection } from "../../lib/seedDraftModelSelection";
@@ -33,14 +42,17 @@ import {
 } from "../../sidebarProjectGrouping";
 import { useProjects } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import ChatView from "../ChatView";
-import type { ChatComposerHandle } from "../chat/ChatComposer";
-import { draftSendState } from "../chat/chatViewSend";
+import ChatView, { type DraftComposerLaneProps, type DraftLaunchState } from "../ChatView";
+import type { ChatComposerHandle, ComposerFooterActionsProps } from "../chat/ChatComposer";
+import { ComposerPrimaryActions } from "../chat/ComposerPrimaryActions";
+import { draftSendState, restoreComposerDraft } from "../chat/chatViewSend";
+import type { RetainedComposerFailure } from "../chat/useComposerSend";
 import { useSortedProjectGroups } from "../CommandPaletteLookups";
 import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button, InlineButton } from "../ui/button";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   Combobox,
   ComboboxEmpty,
@@ -52,10 +64,15 @@ import {
   useComboboxFilter,
 } from "../ui/combobox";
 import {
+  quickComposerSubmissionIntent,
   readLastQuickComposerTarget,
   resolveInitialQuickComposerTarget,
   writeLastQuickComposerTarget,
 } from "./quickComposer.logic";
+import {
+  QuickComposerRecoveryAlert,
+  type QuickComposerRecoveryEntry,
+} from "./QuickComposerRecoveryAlert";
 
 const NO_PROJECT_VALUE = "__quick-composer:no-project__";
 // Builds before every new slot reserved its own thread id could save the draft id as one.
@@ -92,6 +109,11 @@ export function QuickComposerWindow() {
   const scratchRequestRef = useRef(0);
   const [scratchPending, setScratchPending] = useState(false);
   const [composerActivity, setComposerActivity] = useState({ busy: false, sending: false });
+  // Outlives the ChatView remount after an accepted send: each entry is a failed message's only copy.
+  const [failedMessages, setFailedMessages] = useState<
+    readonly (RetainedComposerFailure & { readonly id: number })[]
+  >([]);
+  const failedMessageIdRef = useRef(0);
   const pickerFilter = useComboboxFilter();
 
   const draftSession = useComposerDraftStore((store) =>
@@ -156,12 +178,13 @@ export function QuickComposerWindow() {
   }, [draftSession, initialTarget, rotateDraftThreadId, slotThreadReserved]);
 
   // Report draft occupancy to the desktop main process so idle teardown only runs when safe.
+  const hasUnsavedContent = hasDraftContent || failedMessages.length > 0;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes draft occupancy to the Electron quick-composer service for idle teardown gating
   useEffect(() => {
     void window.desktopBridge?.quickComposer
-      ?.setDraftState({ hasContent: hasDraftContent, busy: composerActivity.busy })
+      ?.setDraftState({ hasContent: hasUnsavedContent, busy: composerActivity.busy })
       .catch(() => undefined);
-  }, [hasDraftContent, composerActivity.busy]);
+  }, [hasUnsavedContent, composerActivity.busy]);
 
   const hidePopout = useEffectEvent(async () => {
     if (composerRef.current?.isDictating()) {
@@ -280,6 +303,66 @@ export function QuickComposerWindow() {
     }
   };
 
+  const keepFailedMessage = (failed: RetainedComposerFailure) => {
+    failedMessageIdRef.current += 1;
+    const id = failedMessageIdRef.current;
+    setFailedMessages((current) => [...current, { ...failed, id }]);
+  };
+
+  // Its files and context belong to the project it was sent to, so it only returns there.
+  const canRestoreTo = (failed: RetainedComposerFailure) =>
+    !scratchPending &&
+    activeProjectRef !== null &&
+    activeProjectRef.environmentId === failed.destination.environmentId &&
+    activeProjectRef.projectId === failed.destination.projectId;
+
+  const restoreFailedMessage = (failed: RetainedComposerFailure & { readonly id: number }) => {
+    if (!canRestoreTo(failed)) return;
+    // Added after the current draft, which stays as typed; the images get fresh previews.
+    restoreComposerDraft(QUICK_COMPOSER_DRAFT_ID, failed.snapshot);
+    setFailedMessages((current) => current.filter((candidate) => candidate.id !== failed.id));
+    const prompt =
+      useComposerDraftStore.getState().getComposerDraft(QUICK_COMPOSER_DRAFT_ID)?.prompt ?? "";
+    composerRef.current?.resetCursorState({
+      prompt,
+      cursor: collapseExpandedComposerCursor(prompt, prompt.length),
+    });
+    // After the editor renders the restored text, so the caret lands at its end.
+    window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
+  };
+
+  const recoveryNotice = (
+    draftError: { readonly detail: string; readonly onDismiss: () => void } | null,
+  ) => {
+    const entries: QuickComposerRecoveryEntry[] = failedMessages.map((failed) => ({
+      kind: "kept",
+      key: `kept:${failed.id}`,
+      failure: failed,
+      onRestore: canRestoreTo(failed) ? () => restoreFailedMessage(failed) : null,
+    }));
+    // Listed last: each send clears the draft's error, so it follows every failure kept before it.
+    if (draftError)
+      entries.push({ kind: "error", key: `error:${draftError.detail}`, ...draftError });
+    return (
+      <QuickComposerRecoveryAlert
+        entries={entries}
+        onDismiss={(entry) => {
+          // Focus moves before the entry unmounts, or its focused button would drop it to the body.
+          composerRef.current?.focusAtEnd();
+          if (entry.kind === "error") {
+            draftError?.onDismiss();
+            return;
+          }
+          // Dismissing is the message's discard, so its uploads go with it.
+          releaseDraftAttachments(entry.failure.snapshot.attachments);
+          setFailedMessages((current) =>
+            current.filter((failed) => `kept:${failed.id}` !== entry.key),
+          );
+        }}
+      />
+    );
+  };
+
   const activeProject =
     activeProjectRef === null
       ? null
@@ -379,8 +462,8 @@ export function QuickComposerWindow() {
     );
   }
 
-  const header = (launchStatus: ReactNode) => (
-    <div className="drag-region mb-2 flex items-center justify-between gap-2">
+  const header = (launchStatus: DraftLaunchState) => (
+    <div className="drag-region mb-1 flex items-center justify-between gap-2 sm:mb-2">
       <div className="flex min-w-0 items-center gap-1.5">
         <Combobox
           items={pickerItems}
@@ -488,7 +571,7 @@ export function QuickComposerWindow() {
       </div>
 
       <div className="flex min-w-0 items-center gap-1">
-        {launchStatus}
+        <QuickComposerLaunchStatus {...launchStatus} />
         <Button
           size="icon-xs"
           variant="ghost"
@@ -511,16 +594,119 @@ export function QuickComposerWindow() {
         environmentId={draftSession.environmentId}
         threadId={draftSession.threadId}
         reserveTitleBarControlInset={false}
-        quickComposer={{
+        draftHost={{
+          overlayClassName:
+            "pointer-events-none absolute inset-0 z-20 flex flex-col justify-start pt-2 pb-1 sm:pt-3",
+          Lane: QuickComposerLane,
           header,
+          notice: recoveryNotice,
+          onFailedMessageKept: keepFailedMessage,
           composerRef,
-          onDismiss: () => void hidePopout(),
+          composerSurface: {
+            defaultSubmissionIntent: "background",
+            keySubmissionIntent: quickComposerSubmissionIntent,
+            onUnhandledEscape: () => void hidePopout(),
+            onActivityChange: setComposerActivity,
+            FooterActions: QuickComposerSendActions,
+          },
           sendDisabledReason: scratchPending ? gt("Switching to No project") : null,
           sending: composerActivity.sending,
-          onBusyChange: setComposerActivity,
           onSendAccepted: handleSendAccepted,
         }}
       />
     </main>
+  );
+}
+
+function QuickComposerLane({ laneRef, header, children }: DraftComposerLaneProps) {
+  return (
+    <>
+      <div className="pointer-events-auto shrink-0 px-3">{header}</div>
+      <div
+        ref={laneRef}
+        className="scrollbar-gutter-both pointer-events-auto min-h-0 w-full overflow-y-auto px-1.5"
+      >
+        {children}
+      </div>
+    </>
+  );
+}
+
+function QuickComposerSendActions({
+  submit,
+  requiresSendModifier,
+  ...actions
+}: ComposerFooterActionsProps) {
+  const gt = useGT();
+  const enter = { key: "enter", ctrlKey: false, metaKey: false, altKey: false };
+  const sendShortcut = formatShortcutLabel({
+    ...enter,
+    modKey: requiresSendModifier,
+    shiftKey: false,
+  });
+  const openShortcut = formatShortcutLabel({ ...enter, modKey: true, shiftKey: true });
+
+  return (
+    <ComposerPrimaryActions
+      {...actions}
+      sendPresentation={{
+        label: gt("Send", { $context: "verb, sends the message without opening T3 Code" }),
+        tooltip: gt("Send in background ({shortcut})", { shortcut: sendShortcut }),
+        renderSecondaryAction: ({ disabled, status, statusId, onPointerDown }) => (
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Button
+                type="button"
+                size="compact"
+                variant="outline"
+                onPointerDown={onPointerDown}
+                disabled={disabled}
+                aria-label={gt("Send and open in T3 Code")}
+                aria-describedby={statusId}
+                onClick={() => submit("foreground")}
+              >
+                <ArrowUpRightIcon aria-hidden />
+                <span className="@max-[400px]/composer-surface:hidden">{gt("Send and open")}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipPopup align="end">
+              {status ?? gt("Send and open in T3 Code ({shortcut})", { shortcut: openShortcut })}
+            </TooltipPopup>
+          </Tooltip>
+        ),
+      }}
+    />
+  );
+}
+
+/**
+ * One line naming what an unaccepted launch is waiting on, in place of the timeline the window
+ * does not show. The live region stays mounted so the first status is announced.
+ */
+function QuickComposerLaunchStatus(props: DraftLaunchState) {
+  const gt = useGT();
+  return (
+    <div className="flex min-w-0 items-center gap-2.5 px-1 text-xs text-muted-foreground">
+      <span role="status" className="flex min-w-0 items-center gap-1.5">
+        {props.sending ? (
+          <>
+            <Spinner size="xs" tone="muted" aria-hidden className="shrink-0" />
+            <span className="truncate">
+              {props.preparingWorktree ? gt("Preparing worktree") : gt("Sending…")}
+            </span>
+          </>
+        ) : null}
+      </span>
+      {props.sending && props.onWorkLocally ? (
+        <InlineButton tone="muted" touchTarget="padded" onClick={props.onWorkLocally}>
+          <T>Work locally</T>
+        </InlineButton>
+      ) : null}
+      {props.sending && props.onCancelWorktreeSetup ? (
+        <InlineButton tone="muted" touchTarget="padded" onClick={props.onCancelWorktreeSetup}>
+          <T>Cancel</T>
+        </InlineButton>
+      ) : null}
+    </div>
   );
 }

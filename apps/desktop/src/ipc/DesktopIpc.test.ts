@@ -16,11 +16,16 @@ it.effect("answers trusted app windows' top frames and rejects subframes and gue
     const invoke = new Map<string, DesktopIpc.DesktopIpcHandleListener>();
     const sync = new Map<string, DesktopIpc.DesktopIpcSyncListener>();
     const mainWindow = {
+      isDestroyed: () => false,
       webContents: { id: 1, mainFrame },
     } as unknown as Electron.BrowserWindow;
     const quickComposerWindow = {
+      isDestroyed: () => false,
+      once: vi.fn(),
       webContents: { id: 3, mainFrame: quickComposerMainFrame },
     } as unknown as Electron.BrowserWindow;
+    const untrust = ElectronWindow.trustAuxiliaryAppWindow(quickComposerWindow);
+    yield* Effect.addFinalizer(() => Effect.sync(untrust));
     const ipc = yield* DesktopIpc.DesktopIpc.pipe(
       Effect.provide(
         DesktopIpc.layer({
@@ -32,7 +37,6 @@ it.effect("answers trusted app windows' top frames and rejects subframes and gue
           Layer.provide(
             Layer.mock(ElectronWindow.ElectronWindow, {
               main: Effect.succeedSome(mainWindow),
-              trustedAppWindows: Effect.succeed([mainWindow, quickComposerWindow]),
             }),
           ),
         ),

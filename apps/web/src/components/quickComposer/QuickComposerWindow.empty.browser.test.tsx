@@ -1,10 +1,11 @@
-import { ProjectId, ThreadId, WS_METHODS } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId, WS_METHODS } from "@t3tools/contracts";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { QUICK_COMPOSER_DRAFT_ID, useComposerDraftStore } from "~/composerDraftStore";
+import { randomUUID } from "~/lib/utils";
 import {
   answerRpc,
   emitProject,
@@ -38,17 +39,19 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
+// The browser runner shares an origin across test files. The empty-draft path must start with
+// its own storage before the draft store imports and hydrates.
+await vi.hoisted(async () => {
+  const { createMemoryStorage } = await import("~/lib/storage");
+  vi.stubGlobal("localStorage", createMemoryStorage());
+});
+
 const SCRATCH_PROJECT_ID = ProjectId.make("project-scratch");
 
 it("sends the first scratch draft on a thread of its own when there are no projects", async () => {
-  // Test files in parallel share an origin, and drafts sync across windows through storage
-  // events, so another file's Quick Composer slot would arrive here.
-  const blockStorageSync = (event: StorageEvent) => event.stopImmediatePropagation();
-  window.addEventListener("storage", blockStorageSync, true);
-  using _storageSync = {
-    [Symbol.dispose]: () => window.removeEventListener("storage", blockStorageSync, true),
-  };
   using _environment = installFakeEnvironment([], {
+    // The shell cache uses IndexedDB and is shared across browser fixtures at this origin.
+    environmentId: EnvironmentId.make(`environment-empty-composer-${randomUUID()}`),
     scratchWorkspaceRoot: "/workspace/Scratch",
     omitDefaultProject: true,
   });

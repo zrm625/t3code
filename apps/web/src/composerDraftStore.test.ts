@@ -1631,6 +1631,25 @@ describe("composerDraftStore standalone slots", () => {
     expect(state.getComposerDraft(standaloneDraftId)?.prompt).toBe("Unsent in the pop-out");
   });
 
+  it("keeps the pop-out draft private after changing workspace and permissions", () => {
+    const store = useComposerDraftStore.getState();
+    store.setStandaloneDraftThread(standaloneDraftId, projectRef, { threadId: sentThreadId });
+    store.setPrompt(standaloneDraftId, "Private draft");
+    store.setDraftThreadContext(standaloneDraftId, {
+      envMode: "worktree",
+      runtimeMode: "approval-required",
+    });
+
+    const state = useComposerDraftStore.getState();
+    expect(state.getDraftSession(standaloneDraftId)).toMatchObject({
+      envMode: "worktree",
+      runtimeMode: "approval-required",
+      standalone: true,
+    });
+    expect(state.getDraftIdByRef(sentThreadRef)).toBeNull();
+    expect(state.getComposerDraft(sentThreadRef)).toBeNull();
+  });
+
   async function restartWithStorage(storage: ReturnType<typeof createMemoryStorage>) {
     vi.stubGlobal("localStorage", storage);
     vi.resetModules();

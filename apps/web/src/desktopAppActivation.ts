@@ -58,13 +58,6 @@ export async function handleDesktopAppActivationRequest(
   request: DesktopAppActivationRequest,
   dependencies: DesktopAppActivationDependencies,
 ): Promise<DesktopAppActivationResponse> {
-  if (request.type !== "open-workspace") {
-    return failure(
-      request.requestId,
-      "invalid-request",
-      "This desktop activation request is handled by the desktop main process.",
-    );
-  }
   const target = dependencies.getTarget();
   if (target === null) {
     return failure(

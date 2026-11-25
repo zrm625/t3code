@@ -11,7 +11,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import type * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
@@ -114,16 +113,13 @@ export class ElectronWindow extends Context.Service<
     /** Auxiliary windows are never returned as the main-or-first fallback. */
     readonly create: (
       options: Electron.BrowserWindowConstructorOptions,
-      behavior?: { readonly auxiliary?: boolean; readonly trustedApp?: boolean },
+      behavior?: { readonly auxiliary?: boolean },
     ) => Effect.Effect<Electron.BrowserWindow, ElectronWindowCreateError>;
     readonly main: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
-    readonly trustedAppWindows: Effect.Effect<readonly Electron.BrowserWindow[]>;
-    readonly isTrustedAppWebContentsId: (webContentsId: number) => Effect.Effect<boolean>;
     readonly currentMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     readonly focusedMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     readonly setMain: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly clearMain: (window: Option.Option<Electron.BrowserWindow>) => Effect.Effect<void>;
-    readonly onMainCleared: (listener: () => void) => Effect.Effect<void, never, Scope.Scope>;
     readonly prepareReveal: (window: Electron.BrowserWindow) => Effect.Effect<boolean>;
     readonly reveal: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly sendAll: (channel: string, ...args: readonly unknown[]) => Effect.Effect<void>;
@@ -136,6 +132,35 @@ export class ElectronWindow extends Context.Service<
     ) => Effect.Effect<void, E, R>;
   }
 >()("@t3tools/desktop/electron/ElectronWindow") {}
+
+const trustedAuxiliaryWindows = new Map<Electron.BrowserWindow, (() => void) | undefined>();
+
+export function trustAuxiliaryAppWindow(
+  window: Electron.BrowserWindow,
+  closeWithMain?: () => void,
+): () => void {
+  trustedAuxiliaryWindows.set(window, closeWithMain);
+  const unregister = () => {
+    trustedAuxiliaryWindows.delete(window);
+  };
+  window.once("closed", unregister);
+  return unregister;
+}
+
+export function trustedAppWindows(
+  main: Option.Option<Electron.BrowserWindow>,
+): readonly Electron.BrowserWindow[] {
+  const windows = new Set<Electron.BrowserWindow>();
+  if (Option.isSome(main) && !main.value.isDestroyed()) windows.add(main.value);
+  for (const window of trustedAuxiliaryWindows.keys()) {
+    if (!window.isDestroyed()) windows.add(window);
+  }
+  return [...windows];
+}
+
+export function closeAppWindowsWithMain(): void {
+  for (const close of trustedAuxiliaryWindows.values()) close?.();
+}
 
 /** @public */
 export const make = Effect.gen(function* () {
@@ -152,9 +177,6 @@ export const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Effect.sync(() => windowsForegroundFocus?.close()));
   const mainWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
   const auxiliaryWindows = new WeakSet<Electron.BrowserWindow>();
-  const trustedAppWindowSet = new Set<Electron.BrowserWindow>();
-  const mainClearedListeners = new Set<() => void>();
-  let mainWindowSync: Electron.BrowserWindow | null = null;
   const titleBarOverlayWindows = new WeakSet<Electron.BrowserWindow>();
 
   const listWindows = Effect.try({
@@ -204,44 +226,6 @@ export const make = Effect.gen(function* () {
     }
     return first;
   });
-
-  const liveTrustedAppWindows = Effect.gen(function* () {
-    const result: Electron.BrowserWindow[] = [];
-    const main = yield* liveMain;
-    if (Option.isSome(main)) {
-      result.push(main.value);
-    }
-    for (const candidate of trustedAppWindowSet) {
-      if (yield* isWindowDestroyed(candidate)) {
-        trustedAppWindowSet.delete(candidate);
-        continue;
-      }
-      if (!result.includes(candidate)) {
-        result.push(candidate);
-      }
-    }
-    return result;
-  });
-
-  const isTrustedAppWebContentsIdSync = (webContentsId: number): boolean => {
-    if (
-      mainWindowSync !== null &&
-      !mainWindowSync.isDestroyed() &&
-      mainWindowSync.webContents.id === webContentsId
-    ) {
-      return true;
-    }
-    for (const candidate of trustedAppWindowSet) {
-      if (candidate.isDestroyed()) {
-        trustedAppWindowSet.delete(candidate);
-        continue;
-      }
-      if (candidate.webContents.id === webContentsId) {
-        return true;
-      }
-    }
-    return false;
-  };
 
   const focusedMainOrFirst = Effect.gen(function* () {
     const focused = yield* Effect.try({
@@ -294,12 +278,6 @@ export const make = Effect.gen(function* () {
         try: () => {
           const window = new Electron.BrowserWindow(options);
           if (behavior?.auxiliary === true) auxiliaryWindows.add(window);
-          if (behavior?.trustedApp === true) {
-            trustedAppWindowSet.add(window);
-            window.once("closed", () => {
-              trustedAppWindowSet.delete(window);
-            });
-          }
           if (options.titleBarOverlay !== undefined && options.titleBarOverlay !== false) {
             titleBarOverlayWindows.add(window);
           }
@@ -309,47 +287,18 @@ export const make = Effect.gen(function* () {
       });
     }),
     main: liveMain,
-    trustedAppWindows: liveTrustedAppWindows,
-    isTrustedAppWebContentsId: Effect.fn("ElectronWindow.isTrustedAppWebContentsId")(
-      function (webContentsId) {
-        return Effect.sync(() => isTrustedAppWebContentsIdSync(webContentsId));
-      },
-    ),
     currentMainOrFirst,
     focusedMainOrFirst,
     setMain: Effect.fn("ElectronWindow.setMain")(function (window) {
-      mainWindowSync = window;
       return Ref.set(mainWindowRef, Option.some(window));
     }),
     clearMain: Effect.fn("ElectronWindow.clearMain")(function* (window) {
-      let cleared = false;
-      yield* Ref.update(mainWindowRef, (current) => {
-        if (Option.isNone(current)) {
-          return current;
-        }
-        if (Option.isSome(window) && current.value !== window.value) {
-          return current;
-        }
-        cleared = true;
-        return Option.none();
+      const cleared = yield* Ref.modify(mainWindowRef, (current) => {
+        const matches =
+          Option.isSome(current) && (Option.isNone(window) || current.value === window.value);
+        return [matches, matches ? Option.none() : current];
       });
-      if (cleared) {
-        mainWindowSync = null;
-        for (const listener of mainClearedListeners) {
-          listener();
-        }
-      }
-    }),
-    onMainCleared: Effect.fn("ElectronWindow.onMainCleared")(function (listener) {
-      return Effect.acquireRelease(
-        Effect.sync(() => {
-          mainClearedListeners.add(listener);
-        }),
-        () =>
-          Effect.sync(() => {
-            mainClearedListeners.delete(listener);
-          }),
-      ).pipe(Effect.asVoid);
+      if (cleared) closeAppWindowsWithMain();
     }),
     prepareReveal: Effect.fn("ElectronWindow.prepareReveal")(function (window) {
       return Effect.promise(async () => {

@@ -480,6 +480,7 @@ function OpenCommandPaletteDialog(props: {
     setHighlightedItemValue(null);
   }
   const clientSettings = useClientSettings(selectCommandPaletteClientSettings);
+  const quickComposerEnabled = useClientSettings((settings) => settings.quickComposerEnabled);
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -1402,7 +1403,7 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const quickComposerBridge = window.desktopBridge?.quickComposer;
-  if (clientSettings.quickComposerEnabled && quickComposerBridge) {
+  if (quickComposerEnabled && quickComposerBridge) {
     actionItems.push({
       kind: "action",
       value: "action:open-quick-composer",

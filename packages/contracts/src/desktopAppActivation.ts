@@ -7,14 +7,14 @@ export const DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION = 1 as const;
 export const DesktopAppActivationPlatform = Schema.Literals(["darwin", "linux", "win32"]);
 export type DesktopAppActivationPlatform = typeof DesktopAppActivationPlatform.Type;
 
-export const DesktopAppOpenWorkspaceRequest = Schema.Struct({
+export const DesktopAppActivationRequest = Schema.Struct({
   version: Schema.Literal(DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION),
   requestId: TrimmedNonEmptyString,
   type: Schema.Literal("open-workspace"),
   workspaceRoot: TrimmedNonEmptyString,
   platform: DesktopAppActivationPlatform,
 });
-export type DesktopAppOpenWorkspaceRequest = typeof DesktopAppOpenWorkspaceRequest.Type;
+export type DesktopAppActivationRequest = typeof DesktopAppActivationRequest.Type;
 
 export const DesktopAppQuickComposerRequest = Schema.Struct({
   version: Schema.Literal(DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION),
@@ -25,11 +25,11 @@ export const DesktopAppQuickComposerRequest = Schema.Struct({
 });
 export type DesktopAppQuickComposerRequest = typeof DesktopAppQuickComposerRequest.Type;
 
-export const DesktopAppActivationRequest = Schema.Union([
-  DesktopAppOpenWorkspaceRequest,
+export const DesktopAppControlRequest = Schema.Union([
+  DesktopAppActivationRequest,
   DesktopAppQuickComposerRequest,
 ]);
-export type DesktopAppActivationRequest = typeof DesktopAppActivationRequest.Type;
+export type DesktopAppControlRequest = typeof DesktopAppControlRequest.Type;
 
 export const DesktopAppActivationErrorCode = Schema.Literals([
   "invalid-request",
@@ -73,7 +73,12 @@ export type DesktopAppActivationFailure = typeof DesktopAppActivationFailure.Typ
 
 export const DesktopAppActivationResponse = Schema.Union([
   DesktopAppActivationSuccess,
-  DesktopAppQuickComposerActivationSuccess,
   DesktopAppActivationFailure,
 ]);
 export type DesktopAppActivationResponse = typeof DesktopAppActivationResponse.Type;
+
+export const DesktopAppControlResponse = Schema.Union([
+  DesktopAppActivationResponse,
+  DesktopAppQuickComposerActivationSuccess,
+]);
+export type DesktopAppControlResponse = typeof DesktopAppControlResponse.Type;

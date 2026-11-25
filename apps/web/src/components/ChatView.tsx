@@ -36,7 +36,7 @@ import { useTimelineRewind } from "./chat/useTimelineRewind";
 import { useThreadLifecycle } from "./chat/useThreadLifecycle";
 import { useRightPanelActions } from "./chat/useRightPanelActions";
 import { type TerminalLaunchContext, useChatTerminalActions } from "./chat/useChatTerminalActions";
-import { useComposerSend } from "./chat/useComposerSend";
+import { type RetainedComposerFailure, useComposerSend } from "./chat/useComposerSend";
 import { useComposerResume } from "./chat/useComposerResume";
 import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
@@ -211,7 +211,6 @@ import { GuestPendingMessages } from "./chat/GuestShareControls";
 import { useDeviceState } from "~/state/device";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { ComposerContextPermissions } from "./ComposerContextPermissions";
-import { QuickComposerLaunchStatus } from "./quickComposer/QuickComposerLaunchStatus";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { isEditableFocused } from "../lib/editableFocus";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
@@ -300,7 +299,11 @@ import {
   useThreadCheckpointSummaries,
 } from "../state/entities";
 import { useEnvironmentShellHasSnapshot } from "../state/shell";
-import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import {
+  ChatComposer,
+  type ChatComposerHandle,
+  type ComposerHostOptions,
+} from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialogHost, openExpandedImagePreview } from "./chat/ExpandedImageDialog";
 import {
@@ -350,9 +353,9 @@ import {
 import {
   dismissThreadErrorBannerForSession,
   getThreadErrorBannerKey,
+  getThreadErrorBannerMessage,
   isThreadErrorBannerDismissedForSession,
   shouldShowThreadErrorBanner,
-  ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
 import { QueuedRunsControl, type QueuedRunsControlHandle } from "./chat/QueuedRunsControl";
 import { useThreadLinkedPullRequest } from "./pullRequest/useThreadLinkedPullRequest";
@@ -443,6 +446,27 @@ const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
 
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 
+export interface DraftLaunchState {
+  readonly sending: boolean;
+  readonly preparingWorktree: boolean;
+  readonly onWorkLocally: (() => void) | null;
+  readonly onCancelWorktreeSetup: (() => void) | null;
+}
+
+export interface DraftComposerLaneProps {
+  readonly laneRef: React.Ref<HTMLDivElement>;
+  readonly header: React.ReactNode;
+  readonly children: React.ReactNode;
+}
+
+function ChatComposerLane({ laneRef, children }: DraftComposerLaneProps) {
+  return (
+    <div ref={laneRef} className="chat-composer-lane w-full">
+      {children}
+    </div>
+  );
+}
+
 type ChatViewProps =
   | {
       environmentId: EnvironmentId;
@@ -464,19 +488,25 @@ type ChatViewProps =
       embedded?: never;
       routeKind: "draft";
       draftId: DraftId;
-      quickComposer?: {
+      draftHost?: {
+        readonly overlayClassName: string;
+        readonly Lane: React.ComponentType<DraftComposerLaneProps>;
         /** Receives the launch status, which sits in the header so it never moves the composer. */
-        readonly header: (launchStatus: React.ReactNode) => React.ReactNode;
+        readonly header: (launchStatus: DraftLaunchState) => React.ReactNode;
+        /**
+         * Sits above the composer, in its scroll flow, so it never covers the draft. Takes the
+         * draft's own error, so the window shows every failure in one place.
+         */
+        readonly notice: (
+          draftError: { readonly detail: string; readonly onDismiss: () => void } | null,
+        ) => React.ReactNode;
+        readonly onFailedMessageKept: (failed: RetainedComposerFailure) => void;
         readonly composerRef: React.RefObject<ChatComposerHandle | null>;
-        readonly onDismiss: () => void;
+        readonly composerSurface: ComposerHostOptions;
         /** Holds every send while the window switches its destination. */
         readonly sendDisabledReason: string | null;
-        /** The `sending` last reported through `onBusyChange`; the draft's workspace locks while true. */
+        /** The `sending` last reported through `composerSurface.onActivityChange`; the draft's workspace locks while true. */
         readonly sending: boolean;
-        readonly onBusyChange: (activity: {
-          readonly busy: boolean;
-          readonly sending: boolean;
-        }) => void;
         readonly onSendAccepted: (result: {
           readonly environmentId: EnvironmentId;
           readonly projectId: ProjectId;
@@ -503,10 +533,11 @@ export default function ChatView(props: ChatViewProps) {
     embedded: parentPanel,
   } = props;
   const embedded = parentPanel !== undefined;
-  const quickComposer = routeKind === "draft" ? props.quickComposer : undefined;
-  const isQuickComposer = quickComposer !== undefined;
-  const isChromeless = embedded || isQuickComposer;
-  const quickComposerLaunchPending = quickComposer?.sending === true;
+  const draftHost = routeKind === "draft" ? props.draftHost : undefined;
+  const isHostedDraft = draftHost !== undefined;
+  const ComposerLane = draftHost?.Lane ?? ChatComposerLane;
+  const isChromeless = embedded || isHostedDraft;
+  const hostedDraftSending = draftHost?.sending === true;
   const panelHostShell = useQuietThreadShell(parentPanel?.hostRef ?? null);
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
@@ -582,7 +613,7 @@ export default function ChatView(props: ChatViewProps) {
   const promptRef = useRef("");
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const contextComposerRef = useComposerHandleContext();
-  const composerRef = quickComposer?.composerRef ?? contextComposerRef ?? localComposerRef;
+  const composerRef = draftHost?.composerRef ?? contextComposerRef ?? localComposerRef;
   const queuedRunEdit = useQueuedRunEdit({
     environmentId,
     routeThreadRef,
@@ -2979,7 +3010,7 @@ export default function ChatView(props: ChatViewProps) {
         if (!event.repeat) copyActiveThreadReference();
       },
       // The workspace strip is inert during a Quick Composer launch; these reach its pickers directly.
-      ...(quickComposerLaunchPending
+      ...(hostedDraftSending
         ? { "composer.branch": () => undefined, "composer.previousWorktree": () => undefined }
         : {}),
       "chat.find": () => {
@@ -3236,7 +3267,8 @@ export default function ChatView(props: ChatViewProps) {
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
-    quickComposerOnAccepted: quickComposer?.onSendAccepted,
+    onDraftSendAccepted: draftHost?.onSendAccepted,
+    onRetainedSendFailure: draftHost?.onFailedMessageKept,
   });
 
   const onWorktreeSetupWorkLocally = () => {
@@ -3249,15 +3281,23 @@ export default function ChatView(props: ChatViewProps) {
   };
   const onWorktreeSetupWorkLocallyStable = useStableCallback(onWorktreeSetupWorkLocally);
   const onComposerSendStable = useStableCallback(onSend);
-  // A Quick Composer send owns its draft from the click: routing waits run before the composer
+  // The host owns its draft from the click: routing waits run before the composer
   // reports the send, and its workspace and permissions must hold until the launch settles.
-  const [quickComposerSendsInFlight, setQuickComposerSendsInFlight] = useState(0);
-  const onQuickComposerSendStable = useStableCallback((...args: Parameters<typeof onSend>) => {
-    setQuickComposerSendsInFlight((count) => count + 1);
-    void onSend(...args).finally(() => setQuickComposerSendsInFlight((count) => count - 1));
+  const [hostedSendsInFlight, setHostedSendsInFlight] = useState(0);
+  const onHostedDraftSendStable = useStableCallback((...args: Parameters<typeof onSend>) => {
+    setHostedSendsInFlight((count) => count + 1);
+    void onSend(...args).finally(() => {
+      setHostedSendsInFlight((count) => count - 1);
+      // A focused control the send disabled (Send itself) loses focus to the body; any other
+      // place focus was moved to during the launch stays put.
+      const focused = document.activeElement;
+      if (focused === null || focused === document.body || focused.matches(":disabled")) {
+        focusComposerStable();
+      }
+    });
   });
   const onRuntimeModeChangeStable = useStableCallback((mode: RuntimeMode) => {
-    if (isQuickComposer && (quickComposerLaunchPending || sendInFlightRef.current)) return;
+    if (isHostedDraft && (hostedDraftSending || sendInFlightRef.current)) return;
     handleRuntimeModeChangeStable(mode);
   });
   const sendPreviewAnnotation = (
@@ -3678,7 +3718,7 @@ export default function ChatView(props: ChatViewProps) {
               providerStatusDismissalKey={providerStatusDismissalKey}
               onOpenProviderSetup={openProviderSetupStable}
               threadId={activeThread.id}
-              threadError={isQuickComposer ? null : timelineThreadError}
+              threadError={isHostedDraft ? null : timelineThreadError}
               threadErrorClass={
                 threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorClass ?? null) : null
               }
@@ -3693,7 +3733,7 @@ export default function ChatView(props: ChatViewProps) {
               {...conversationArea}
               className="relative flex min-h-0 flex-1 flex-col bg-background"
             >
-              {isQuickComposer ? null : (
+              {isHostedDraft ? null : (
                 <WorkspaceMutationIdContext value={workspaceMutationId}>
                   <ThreadTimeline
                     pendingApprovals={pendingApprovals}
@@ -3806,7 +3846,7 @@ export default function ChatView(props: ChatViewProps) {
                 </WorkspaceMutationIdContext>
               )}
 
-              {showScrollToBottom && !isThreadFindActive && !isQuickComposer && (
+              {showScrollToBottom && !isThreadFindActive && !isHostedDraft && (
                 <ScrollToEndButton
                   bottom={scrollToEndClearance + 4}
                   summary={scrollToEndSummary}
@@ -3828,71 +3868,45 @@ export default function ChatView(props: ChatViewProps) {
               inert={isRevertingCheckpoint}
               data-chat-composer-overlay="true"
               className={
-                isQuickComposer
-                  ? "pointer-events-none absolute inset-0 z-20 flex flex-col justify-start p-3"
-                  : isDraftHeroState
-                    ? "pointer-events-none absolute inset-0 z-20 flex items-center [@media(max-height:34rem)]:items-end"
-                    : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
+                draftHost?.overlayClassName ??
+                (isDraftHeroState
+                  ? "pointer-events-none absolute inset-0 z-20 flex items-center [@media(max-height:34rem)]:items-end"
+                  : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2")
               }
             >
-              <div
-                ref={draftHeroTransitionGroupRef}
-                // A long error can outgrow the Quick Composer; its workspace row scrolls into reach.
-                className={cn(
-                  "w-full [scrollbar-width:none]",
-                  isQuickComposer ? "min-h-0 overflow-y-auto" : "chat-composer-lane",
-                )}
+              <ComposerLane
+                laneRef={draftHeroTransitionGroupRef}
+                header={draftHost?.header({
+                  sending: hostedDraftSending,
+                  preparingWorktree: isPreparingWorktree || worktreeSetup?.phase === "running",
+                  onWorkLocally:
+                    draftId && worktreeSetup?.phase === "running"
+                      ? onWorktreeSetupWorkLocallyStable
+                      : null,
+                  onCancelWorktreeSetup:
+                    worktreeSetup?.phase === "running" ? onCancelWorktreeSetupStable : null,
+                })}
               >
                 <div
                   data-chat-composer-stack="true"
                   className={cn(
                     "group/composer-stack pointer-events-auto relative z-10 mx-auto w-full",
-                    !isQuickComposer && "max-w-(--chat-content-max-width)",
+                    !isHostedDraft && "max-w-(--chat-content-max-width)",
                   )}
                 >
-                  {isQuickComposer ? (
-                    <>
-                      {quickComposer.header(
-                        <QuickComposerLaunchStatus
-                          sending={quickComposerLaunchPending}
-                          preparingWorktree={
-                            isPreparingWorktree || worktreeSetup?.phase === "running"
-                          }
-                          onWorkLocally={
-                            draftId && worktreeSetup?.phase === "running"
-                              ? onWorktreeSetupWorkLocallyStable
-                              : null
-                          }
-                          onCancelWorktreeSetup={
-                            worktreeSetup?.phase === "running" ? onCancelWorktreeSetupStable : null
-                          }
-                        />,
-                      )}
-                      {timelineThreadError ? (
-                        <div className="mb-1.5">
-                          <ThreadErrorBanner
-                            inline
-                            error={timelineThreadError}
-                            errorClass={
-                              threadErrorIsServerRuntimeError
-                                ? (serverRuntime?.lastErrorClass ?? null)
-                                : null
-                            }
-                            errorCode={
-                              threadErrorIsServerRuntimeError
-                                ? (serverRuntime?.lastErrorCode ?? null)
-                                : null
-                            }
-                            onDismiss={() => {
+                  {isHostedDraft ? (
+                    draftHost.notice(
+                      timelineThreadError
+                        ? {
+                            detail: getThreadErrorBannerMessage(timelineThreadError),
+                            onDismiss: () => {
                               setThreadError(activeThread.id, null);
                               dismissThreadErrorBannerForSession(threadErrorBannerKey);
                               setThreadErrorBannerDismissTick((tick) => tick + 1);
-                              focusComposerStable();
-                            }}
-                          />
-                        </div>
-                      ) : null}
-                    </>
+                            },
+                          }
+                        : null,
+                    )
                   ) : isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
@@ -3957,11 +3971,9 @@ export default function ChatView(props: ChatViewProps) {
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
                                 multipleModelSelections={multipleModelSelections}
-                                quickComposerMode={isQuickComposer}
-                                onQuickComposerDismiss={quickComposer?.onDismiss}
-                                onQuickComposerBusyChange={quickComposer?.onBusyChange}
+                                surface={draftHost?.composerSurface}
                                 supportsMultipleModels={
-                                  !isQuickComposer &&
+                                  !isHostedDraft &&
                                   serverConfig?.environment.capabilities
                                     .requiredWorktreeBootstrap === true
                                 }
@@ -3980,8 +3992,10 @@ export default function ChatView(props: ChatViewProps) {
                                 activeThread={activeThread}
                                 activeThreadRuns={serverProjection?.runs ?? EMPTY_RUNS}
                                 promptHistoryEntries={timelineEntries}
+                                // The narrowest Quick Composer is phone-width, but its draft
+                                // must stay visible while its alerts or controls hold focus.
                                 forceExpandedOnMobile={
-                                  forceExpandedMobileComposer && isDraftHeroState
+                                  isHostedDraft || (forceExpandedMobileComposer && isDraftHeroState)
                                 }
                                 projectSelectionRequired={
                                   isLocalDraftThread && activeProject === null
@@ -3995,13 +4009,13 @@ export default function ChatView(props: ChatViewProps) {
                                     setupQueueSendThreadKey === activeThreadKey) ||
                                   queuedRunEdit.isSaving ||
                                   isResuming ||
-                                  quickComposerSendsInFlight > 0
+                                  hostedSendsInFlight > 0
                                 }
                                 canResume={canResume}
                                 isRevertingCheckpoint={isRevertingCheckpoint}
                                 sendDisabledReason={
-                                  quickComposer?.sendDisabledReason
-                                    ? quickComposer.sendDisabledReason
+                                  draftHost?.sendDisabledReason
+                                    ? draftHost.sendDisabledReason
                                     : !canOperateThread
                                       ? gt("This connection cannot change threads.")
                                       : isEnvironmentChanging
@@ -4085,7 +4099,7 @@ export default function ChatView(props: ChatViewProps) {
                                 onPageScrollRelease={onComposerPageScrollReleaseStable}
                                 onCompactContext={onComposerCompactContextStable}
                                 onSend={
-                                  isQuickComposer ? onQuickComposerSendStable : onComposerSendStable
+                                  isHostedDraft ? onHostedDraftSendStable : onComposerSendStable
                                 }
                                 captureDetachedSend={captureDetachedSend}
                                 onResume={onComposerResumeStable}
@@ -4135,9 +4149,9 @@ export default function ChatView(props: ChatViewProps) {
                               <div
                                 className={cn(
                                   "pointer-events-auto",
-                                  quickComposerLaunchPending && "opacity-64",
+                                  hostedDraftSending && "opacity-64",
                                 )}
-                                inert={quickComposerLaunchPending}
+                                inert={hostedDraftSending}
                               >
                                 <BranchToolbar
                                   forceNewWorktree={multipleModelSelections !== null}
@@ -4210,7 +4224,7 @@ export default function ChatView(props: ChatViewProps) {
                         </div>
                       ) : null}
                     </div>
-                    {isQuickComposer ? null : (
+                    {isHostedDraft ? null : (
                       <div
                         aria-hidden
                         className="h-[calc(env(safe-area-inset-bottom)+1rem)] sm:h-[calc(env(safe-area-inset-bottom)+1.25rem)]"
@@ -4218,7 +4232,7 @@ export default function ChatView(props: ChatViewProps) {
                     )}
                   </div>
                 </div>
-              </div>
+              </ComposerLane>
             </div>
 
             {canOperatePreview &&

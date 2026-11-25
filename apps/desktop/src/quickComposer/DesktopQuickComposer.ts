@@ -136,11 +136,10 @@ export const make = Effect.gen(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const electronTheme = yield* ElectronTheme.ElectronTheme;
   const electronShell = yield* ElectronShell.ElectronShell;
-  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const threadNavigation = yield* DesktopWindow.DesktopThreadNavigation;
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
   const context = yield* Effect.context<never>();
   const runPromise = Effect.runPromiseWith(context);
-  const runSync = Effect.runSyncWith(context);
 
   const shortcutMode = resolveQuickComposerShortcutMode(environment.platform, hostEnvironment);
   const configMutex = yield* Semaphore.make(1);
@@ -324,7 +323,7 @@ export const make = Effect.gen(function* () {
             sandbox: true,
           },
         },
-        { auxiliary: true, trustedApp: true },
+        { auxiliary: true },
       )
       .pipe(
         Effect.catch((error) =>
@@ -357,6 +356,11 @@ export const make = Effect.gen(function* () {
     });
 
     quickComposerWindow = window;
+    // On Windows and Linux, the auxiliary window must close with the main one so the app can quit.
+    ElectronWindow.trustAuxiliaryAppWindow(
+      window,
+      environment.platform === "darwin" ? undefined : destroyWindowNow,
+    );
     windowReadyToShow = false;
     quickComposerReady = false;
 
@@ -366,7 +370,6 @@ export const make = Effect.gen(function* () {
       webContentsId,
       {
         desktopOrigin: applicationOrigin,
-        isAllowedWebContentsId: (id) => runSync(electronWindow.isTrustedAppWebContentsId(id)),
         clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,
         devServerOrigin: Option.getOrUndefined(
           Option.map(environment.devServerUrl, (url) => url.origin),
@@ -622,14 +625,6 @@ export const make = Effect.gen(function* () {
     yield* applySettings(currentSettings);
   }, configMutex.withPermits(1));
 
-  // Destroy the auxiliary window when the main window closes on Linux/Windows so
-  // `window-all-closed` still exits the app cleanly.
-  if (environment.platform !== "darwin") {
-    yield* electronWindow.onMainCleared(() => {
-      destroyWindowNow();
-    });
-  }
-
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       unregisterShortcut();
@@ -669,7 +664,7 @@ export const make = Effect.gen(function* () {
     openThreadInMain: Effect.fn("desktop.quickComposer.openThreadInMain")(function* (input) {
       yield* hideWindowNow();
       previousWindowsHwnd = null;
-      yield* desktopWindow.dispatchQuickComposerOpenThread(input).pipe(Effect.ignore);
+      yield* threadNavigation.open(input).pipe(Effect.ignore);
     }, windowMutex.withPermits(1)),
     setDraftState: Effect.fn("desktop.quickComposer.setDraftState")((next) =>
       Effect.sync(() => {
