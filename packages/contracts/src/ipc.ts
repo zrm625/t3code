@@ -1391,6 +1391,7 @@ export interface DesktopQuickComposerBridge {
   hide: () => Promise<void>;
   openThreadInMain: (input: DesktopQuickComposerOpenThreadInput) => Promise<void>;
   setDraftState: (state: DesktopQuickComposerDraftState) => Promise<void>;
+  resizeHeight: (height: number) => Promise<void>;
   acquireMic: () => Promise<boolean>;
   releaseMic: () => Promise<void>;
   onEvent: (listener: (event: DesktopQuickComposerEvent) => void) => () => void;

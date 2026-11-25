@@ -71,6 +71,7 @@ it("Escape off the editor hides Quick Composer past a closed popup left mounted"
 });
 
 it("Escape closes the project picker before it hides Quick Composer", async () => {
+  await page.viewport(680, 240);
   using _environment = installFakeEnvironment([]);
   await using _app = await renderQuickComposer();
   using quickComposer = stubQuickComposerBridge();
@@ -78,9 +79,13 @@ it("Escape closes the project picker before it hides Quick Composer", async () =
   await page.getByRole("combobox", { name: /^Choose project/ }).click();
   const projects = page.getByRole("listbox");
   await expect.element(projects).toBeVisible();
+  await vi.waitFor(() => expect(quickComposer.bridge.resizeHeight).toHaveBeenLastCalledWith(440));
   await userEvent.keyboard("{Escape}");
 
   await expect.element(projects).not.toBeInTheDocument();
+  await vi.waitFor(() =>
+    expect(quickComposer.bridge.resizeHeight.mock.lastCall?.[0]).toBeLessThan(440),
+  );
   expect(quickComposer.bridge.hide).not.toHaveBeenCalled();
 });
 
