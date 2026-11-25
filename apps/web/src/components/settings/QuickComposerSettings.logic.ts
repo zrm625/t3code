@@ -16,6 +16,7 @@ export function quickComposerUnavailableMessage(
 export function quickComposerStatus(
   state: DesktopQuickComposerState | null,
   enabled: boolean,
+  formattedShortcut: string,
   resolve: MessageResolver,
 ): string | undefined {
   if (!state) return undefined;
@@ -26,8 +27,8 @@ export function quickComposerStatus(
     );
   }
   if (state.message) return state.message;
-  if (state.shortcutRegistered && state.shortcutLabel) {
-    return resolve(msg("Global shortcut active ({shortcut}).", { shortcut: state.shortcutLabel }));
+  if (state.shortcutRegistered) {
+    return resolve(msg("Global shortcut active ({shortcut}).", { shortcut: formattedShortcut }));
   }
   return resolve(msg("Global shortcut is not registered."));
 }

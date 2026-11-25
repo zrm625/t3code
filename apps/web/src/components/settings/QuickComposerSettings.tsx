@@ -227,7 +227,12 @@ export function QuickComposerSettings() {
             description={gt(
               "Open a floating composer from anywhere to start a new thread without raising the main window.",
             )}
-            status={quickComposerStatus(state, settings.quickComposerEnabled, messages)}
+            status={quickComposerStatus(
+              state,
+              settings.quickComposerEnabled,
+              formatSnapShotShortcutLabel(savedShortcut),
+              messages,
+            )}
             control={
               <>
                 {bridge && settings.quickComposerEnabled ? (

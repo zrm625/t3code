@@ -3802,10 +3802,16 @@ export default function ChatView(props: ChatViewProps) {
                     : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
               }
             >
-              <div ref={draftHeroTransitionGroupRef} className="chat-composer-lane w-full">
+              <div
+                ref={draftHeroTransitionGroupRef}
+                className={isQuickComposer ? "w-full" : "chat-composer-lane w-full"}
+              >
                 <div
                   data-chat-composer-stack="true"
-                  className="group/composer-stack pointer-events-auto relative z-10 mx-auto w-full max-w-(--chat-content-max-width)"
+                  className={cn(
+                    "group/composer-stack pointer-events-auto relative z-10 mx-auto w-full",
+                    !isQuickComposer && "max-w-(--chat-content-max-width)",
+                  )}
                 >
                   {isQuickComposer ? (
                     quickComposer.header
