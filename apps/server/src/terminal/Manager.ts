@@ -576,12 +576,10 @@ const normalizeShellCommand = Effect.fn("terminal.normalizeShellCommand")(functi
 });
 
 function basenameForPlatform(command: string, platform: NodeJS.Platform): string {
-  const normalized =
-    platform === "win32" ? command.replaceAll("/", "\\") : command.replaceAll("\\", "/");
-  const parts = normalized
-    .split(platform === "win32" ? /\\+/ : /\/+/)
+  const parts = command
+    .split(platform === "win32" ? /[\\/]+/ : /\/+/)
     .filter((part) => part.length > 0);
-  return parts.at(-1) ?? normalized;
+  return parts.at(-1) ?? command;
 }
 
 function joinWindowsPath(...parts: ReadonlyArray<string>): string {
@@ -924,7 +922,7 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const powershell = windowsPowerShellPath(yield* HostProcess.Environment);
   const command =
-    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object { Write-Output "$($_.ProcessId)|$($_.ParentProcessId)|$($_.Name)" }';
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name -ErrorAction Stop | ForEach-Object { Write-Output "$($_.ProcessId)|$($_.ParentProcessId)|$($_.Name)" }';
   const result = yield* processRunner
     .run({
       command: powershell,
@@ -1415,8 +1413,7 @@ const OVERSIZED_SEQUENCE = "\u0018";
 // Stands in for the ESC of an oversized sequence, which ended any string history left open.
 const STRING_TERMINATOR = "\u001b\\";
 
-// Longer held text is cut to its introducer in a snapshot, so it cannot push history out of the
-// client's budget or add its size to every resync.
+// Bound the unfinished sequence in snapshots so it cannot push history out of the client's budget.
 const MAX_SNAPSHOT_SEQUENCE_LENGTH = 4_096;
 
 // History leaves out the sequence the terminal is still inside. A client that starts from a
@@ -1425,7 +1422,25 @@ function unfinishedSequenceReplay(session: TerminalSessionState): string {
   const held = session.pendingHistoryControlSequence;
   if (held.startsWith(OVERSIZED_SEQUENCE)) return held.slice(1);
   if (held.length <= MAX_SNAPSHOT_SEQUENCE_LENGTH) return held;
-  return held.slice(0, 2) + (/[\u001b\ud800-\udbff]$/.exec(held)?.[0] ?? "");
+  const introducer = held.slice(0, 2);
+  const tail = /[\u001b\ud800-\udbff]$/.exec(held)?.[0] ?? "";
+  if (introducer === "\u001b[") {
+    // The scanner has already handled bytes that end a CSI. Only intermediates, parameters,
+    // and executed non-NUL controls affect its replay.
+    const body = held
+      .slice(2, held.length - tail.length)
+      .replace(/[^\x01-\x0f\x20-\x3f]+/g, "")
+      .replace(/\r{2,}/g, "\r");
+    const budget = MAX_SNAPSHOT_SEQUENCE_LENGTH - introducer.length - tail.length;
+    if (body.length <= budget) return introducer + body + tail;
+    // Controls execute as they arrive, independently of the parameters dispatched at the end.
+    const parameters = body.replace(/[^\x20-\x3f]+/g, "");
+    const replayParameters = parameters.length <= budget ? parameters : "";
+    const controls = body.replace(/[^\x01-\x0f]+/g, "");
+    const controlsToSkip = Math.max(0, controls.length - (budget - replayParameters.length));
+    return introducer + replayParameters + controls.slice(controlsToSkip) + tail;
+  }
+  return introducer + tail;
 }
 
 export function sanitizeTerminalHistoryChunk(
