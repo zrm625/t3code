@@ -9,8 +9,9 @@ import * as NodePath from "node:path";
 
 import {
   DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
-  DesktopAppActivationRequest,
   type DesktopAppActivationResponse,
+  DesktopAppControlRequest,
+  type DesktopAppControlResponse,
 } from "@t3tools/contracts";
 import { resolveDesktopAppControlAddress } from "@t3tools/shared/desktopAppControl";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -34,7 +35,7 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
-const isDesktopAppActivationRequest = Schema.is(DesktopAppActivationRequest);
+const isDesktopAppControlRequest = Schema.is(DesktopAppControlRequest);
 
 export class DesktopAppActivationStartError extends Schema.TaggedError<DesktopAppActivationStartError>()(
   "DesktopAppActivationStartError",
@@ -110,7 +111,7 @@ export async function startDesktopAppControlServer(input: {
   readonly address: string;
   readonly directory: string | null;
   readonly userId: number | undefined;
-  readonly handle: (request: DesktopAppActivationRequest) => Promise<DesktopAppActivationResponse>;
+  readonly handle: (request: DesktopAppControlRequest) => Promise<DesktopAppControlResponse>;
   readonly cancel: (requestId: string) => void;
   readonly onReclaimError: (error: unknown) => void;
 }): Promise<RunningControlServer> {
@@ -125,7 +126,7 @@ export async function startDesktopAppControlServer(input: {
 
     socket.setTimeout(5_000, () => socket.destroy());
 
-    const finish = (response: DesktopAppActivationResponse) => {
+    const finish = (response: DesktopAppControlResponse) => {
       responseSent = true;
       if (!socket.destroyed) socket.end(`${JSON.stringify(response)}\n`);
     };
@@ -152,7 +153,7 @@ export async function startDesktopAppControlServer(input: {
         return;
       }
 
-      if (!isDesktopAppActivationRequest(parsed)) {
+      if (!isDesktopAppControlRequest(parsed)) {
         pipe(
           requestIdFromUnknown(parsed),
           (requestId) => invalidResponse(requestId, "The desktop app request is invalid."),
@@ -332,63 +333,69 @@ export const make = Effect.gen(function* () {
     broker.clearRenderer();
   };
 
-  return DesktopAppActivation.of({
-    start: Effect.acquireRelease(
-      Effect.tryPromise({
-        try: () =>
-          startDesktopAppControlServer({
-            ...address,
-            userId,
-            handle: async (request) => {
-              if (request.type === "quick-composer") {
-                if (Option.isNone(quickComposer)) {
-                  return {
-                    version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
-                    requestId: request.requestId,
-                    ok: false,
-                    code: "quick-composer-disabled",
-                    message: "Quick Composer is not available in this desktop session.",
-                  } satisfies DesktopAppActivationResponse;
-                }
-                const toggled = await runPromise(
-                  quickComposer.value.toggle({
-                    activationToken: request.activationToken,
-                  }),
-                );
-                if (!toggled) {
-                  return {
-                    version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
-                    requestId: request.requestId,
-                    ok: false,
-                    code: "quick-composer-disabled",
-                    message: "Quick Composer is disabled. Enable it in Settings → Quick Composer.",
-                  } satisfies DesktopAppActivationResponse;
-                }
+  const initializeShortcuts = Option.match(quickComposer, {
+    onNone: () => Effect.void,
+    onSome: (composer) => composer.initialize,
+  });
+  const startServer = Effect.acquireRelease(
+    Effect.tryPromise({
+      try: () =>
+        startDesktopAppControlServer({
+          ...address,
+          userId,
+          handle: async (request) => {
+            if (request.type === "quick-composer") {
+              if (Option.isNone(quickComposer)) {
                 return {
                   version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
                   requestId: request.requestId,
-                  ok: true,
-                  type: "quick-composer",
-                } satisfies DesktopAppActivationResponse;
+                  ok: false,
+                  code: "quick-composer-disabled",
+                  message: "Quick Composer is not available in this desktop session.",
+                } satisfies DesktopAppControlResponse;
               }
-              return broker.request(request);
-            },
-            cancel: (requestId) => broker.cancel(requestId),
-            onReclaimError: (cause) =>
-              void runPromise(
-                logWarning("failed to restore the desktop app control socket", { cause }),
-              ),
-          }),
-        catch: (cause) => new DesktopAppActivationStartError({ address: address.address, cause }),
-      }),
-      (server) =>
-        Effect.promise(() => server.close()).pipe(
-          Effect.catchCause((cause) =>
-            logWarning("failed to close the desktop app control socket", { cause }),
-          ),
-          Effect.ensuring(Effect.sync(() => broker.close())),
+              const toggled = await runPromise(
+                quickComposer.value.toggle({
+                  activationToken: request.activationToken,
+                }),
+              );
+              if (!toggled) {
+                return {
+                  version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+                  requestId: request.requestId,
+                  ok: false,
+                  code: "quick-composer-disabled",
+                  message: "Quick Composer is disabled. Enable it in Settings → Quick Composer.",
+                } satisfies DesktopAppControlResponse;
+              }
+              return {
+                version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+                requestId: request.requestId,
+                ok: true,
+                type: "quick-composer",
+              } satisfies DesktopAppControlResponse;
+            }
+            return broker.request(request);
+          },
+          cancel: (requestId) => broker.cancel(requestId),
+          onReclaimError: (cause) =>
+            void runPromise(
+              logWarning("failed to restore the desktop app control socket", { cause }),
+            ),
+        }),
+      catch: (cause) => new DesktopAppActivationStartError({ address: address.address, cause }),
+    }),
+    (server) =>
+      Effect.promise(() => server.close()).pipe(
+        Effect.catchCause((cause) =>
+          logWarning("failed to close the desktop app control socket", { cause }),
         ),
-    ).pipe(Effect.asVoid),
+        Effect.ensuring(Effect.sync(() => broker.close())),
+      ),
+  ).pipe(Effect.asVoid);
+
+  return DesktopAppActivation.of({
+    start: initializeShortcuts.pipe(Effect.andThen(startServer)),
     setRendererReady: Effect.fn("DesktopAppActivation.setRendererReady")(function* (ready) {
       if (!ready) {
         clearRegisteredRenderer();

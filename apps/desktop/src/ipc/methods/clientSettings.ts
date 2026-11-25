@@ -36,7 +36,7 @@ export const setClientSettings = DesktopIpc.makeIpcMethod({
     yield* applyLanguage(settings.language);
     if (Option.isSome(electronWindow)) {
       const senderId = event?.sender.id;
-      const windows = yield* electronWindow.value.trustedAppWindows;
+      const windows = ElectronWindow.trustedAppWindows(yield* electronWindow.value.main);
       for (const window of windows) {
         if (!window.isDestroyed() && window.webContents.id !== senderId) {
           window.webContents.send(IpcChannels.CLIENT_SETTINGS_CHANGED_CHANNEL, settings);

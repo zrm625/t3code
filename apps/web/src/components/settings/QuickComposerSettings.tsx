@@ -7,28 +7,30 @@ import type {
 } from "@t3tools/contracts";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import { useAtomValue } from "@effect/atom-react";
+import { Link } from "@tanstack/react-router";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { updateClientSettings, useClientSettings } from "../../hooks/useSettings";
-import { m } from "../../i18n/messages";
+import {
+  updateClientSettings,
+  useClientSettings,
+  useClientSettingsHydrated,
+} from "../../hooks/useSettings";
+import { m, type MessageResolver } from "../../i18n/messages";
 import {
   formatSnapShotShortcutLabel,
   snapShotKeybindingConflict,
 } from "../../lib/snapShotShortcut";
+import { useVoiceTranscriptionDestination } from "../../speech/useEnvironmentSpeechInput";
+import { useAudioChoice } from "../../speech/voiceConsent";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { SnapShotShortcutKeys } from "../desktop/SnapShotShortcutKeys";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { commandLabel, keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
-import {
-  quickComposerStatus,
-  quickComposerUnavailableMessage,
-  sameQuickComposerShortcut,
-} from "./QuickComposerSettings.logic";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -36,6 +38,47 @@ import {
   SettingsUnavailableGroup,
 } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
+
+function quickComposerUnavailableMessage(
+  hasBridge: boolean,
+  resolve: MessageResolver,
+): string | undefined {
+  if (!hasBridge) {
+    return resolve(msg("Quick Composer is available in the desktop app."));
+  }
+  return undefined;
+}
+
+function quickComposerStatus(
+  state: DesktopQuickComposerState | null,
+  enabled: boolean,
+  formattedShortcut: string,
+  resolve: MessageResolver,
+): string | undefined {
+  if (!state) return undefined;
+  if (!enabled) return undefined;
+  // The shortcut row below already explains the compositor binding.
+  if (state.mode === "cli-only") return undefined;
+  if (state.message) return state.message;
+  if (state.shortcutRegistered) {
+    return resolve(msg("Global shortcut active ({shortcut}).", { shortcut: formattedShortcut }));
+  }
+  return resolve(msg("Global shortcut is not registered."));
+}
+
+function sameQuickComposerShortcut(
+  left: QuickComposerShortcut,
+  right: QuickComposerShortcut,
+): boolean {
+  return (
+    left.key === right.key &&
+    left.modKey === right.modKey &&
+    left.metaKey === right.metaKey &&
+    left.ctrlKey === right.ctrlKey &&
+    left.altKey === right.altKey &&
+    left.shiftKey === right.shiftKey
+  );
+}
 
 type ShortcutCheckState =
   | { readonly status: "idle"; readonly availability: null }
@@ -355,6 +398,7 @@ export function QuickComposerSettings() {
                 description={gt(
                   "Immediately start voice dictation whenever Quick Composer opens, when voice input is configured.",
                 )}
+                status={<AutoVoiceStatus />}
                 control={
                   <Switch
                     checked={settings.quickComposerAutoVoice}
@@ -369,5 +413,33 @@ export function QuickComposerSettings() {
         </SettingsUnavailableGroup>
       </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+/**
+ * Where dictation would go, from the Voice settings choice alone. Microphone access is asked
+ * for when recording starts, so it is not part of this.
+ */
+function AutoVoiceStatus() {
+  const gt = useGT();
+  const hydrated = useClientSettingsHydrated();
+  const choice = useAudioChoice();
+  const destination = useVoiceTranscriptionDestination();
+  if (!hydrated) return null;
+  const link = (label: string) => (
+    <InlineButton render={<Link to="/settings/voice" />}>{label}</InlineButton>
+  );
+  if (choice === null) return link(gt("Set up voice input"));
+  const summary =
+    choice === "off"
+      ? gt("Voice input is off.")
+      : destination.label !== null && (destination.onDevice || destination.prepared !== null)
+        ? gt("Dictation uses {destination}.", { destination: destination.label })
+        : gt("Voice input unavailable");
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-2">
+      <span>{summary}</span>
+      {link(gt("Open voice settings"))}
+    </span>
   );
 }

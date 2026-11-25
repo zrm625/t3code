@@ -22,9 +22,12 @@ describe("clientSettings IPC", () => {
       } as unknown as Electron.BrowserWindow;
       const popoutWindow = {
         isDestroyed: () => false,
+        once: vi.fn(),
         webContents: { id: 2, send: popoutSend },
       } as unknown as Electron.BrowserWindow;
 
+      const untrust = ElectronWindow.trustAuxiliaryAppWindow(popoutWindow);
+      yield* Effect.addFinalizer(() => Effect.sync(untrust));
       const updated = { ...DEFAULT_CLIENT_SETTINGS, quickComposerEnabled: true };
       yield* setClientSettings
         .handler(updated, { sender: { id: 1 } } as Electron.IpcMainInvokeEvent)
@@ -40,7 +43,7 @@ describe("clientSettings IPC", () => {
             configure: () => Effect.void,
           } as unknown as DesktopQuickComposer.DesktopQuickComposer["Service"]),
           Effect.provideService(ElectronWindow.ElectronWindow, {
-            trustedAppWindows: Effect.succeed([mainWindow, popoutWindow]),
+            main: Effect.succeedSome(mainWindow),
           } as unknown as ElectronWindow.ElectronWindow["Service"]),
           Effect.provideService(ElectronApp.ElectronApp, {
             preferredSystemLanguages: Effect.succeed(["en-US"]),

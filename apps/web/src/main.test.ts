@@ -1,8 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 
-vi.mock("./appInit", () => ({
-  startAppServices: () => ({ router: { load: async () => {} }, isQuickComposerSurface: false }),
-}));
+vi.mock("./appInit", () => ({ startAppServices: () => ({ load: async () => {} }) }));
 vi.mock("./AppRoot", () => ({ AppRoot: () => null }));
 vi.mock("./i18n/runtime", () => ({ whenLocaleReady: async () => {} }));
 vi.mock("react-dom/client", () => ({ default: { createRoot: () => ({ render: () => {} }) } }));

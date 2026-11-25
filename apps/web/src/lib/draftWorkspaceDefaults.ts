@@ -22,6 +22,7 @@ import { environmentSummaries } from "../state/presentation";
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveNewDraftStartFromOrigin } from "./chatThreadActions";
 import { peekT3ProjectFile, readT3ProjectFile } from "./t3ProjectFileDefaults";
+import { newThreadId } from "./utils";
 
 // Drafts that opened before their project's t3.json was read. A send waits for the file's
 // workspace default unless the user has already chosen a workspace.
@@ -148,29 +149,32 @@ export function resolveDraftWorkspaceDefaults(
       });
     pendingWorkspaceDefaults.set(draftId, { ...provisional, settled });
   };
-  return { envMode, startFromOrigin, applyProjectFile };
+  return {
+    envMode,
+    startFromOrigin,
+    runtimeMode: projectSettings.settings.defaultRuntimeMode,
+    applyProjectFile,
+  };
 }
 
-export function setStandaloneDraftProject(
-  draftId: DraftId,
-  projectRef: ScopedProjectRef,
-  threadId?: ThreadId,
-): void {
+export function setStandaloneDraftProject(draftId: DraftId, projectRef: ScopedProjectRef): void {
   const { getDraftSession, setStandaloneDraftThread } = useComposerDraftStore.getState();
   const draft = getDraftSession(draftId);
   if (draft?.environmentId === projectRef.environmentId && draft.projectId === projectRef.projectId)
     return;
 
   const config = appAtomRegistry.get(environmentServerConfigsAtom).get(projectRef.environmentId);
-  const { envMode, startFromOrigin, applyProjectFile } = resolveDraftWorkspaceDefaults(
+  const { envMode, startFromOrigin, runtimeMode, applyProjectFile } = resolveDraftWorkspaceDefaults(
     projectRef,
     readProject(projectRef) ?? undefined,
     config,
   );
   setStandaloneDraftThread(draftId, projectRef, {
-    ...(threadId === undefined ? {} : { threadId }),
+    // The slot's draft id is not a server thread id; a new slot reserves one of its own.
+    ...(draft === null ? { threadId: newThreadId() } : {}),
     envMode,
     startFromOrigin,
+    runtimeMode,
     environmentSelection: "auto",
   });
   applyProjectFile(draftId);

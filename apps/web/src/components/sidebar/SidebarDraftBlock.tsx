@@ -23,6 +23,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   composerDraftHasUserContent,
   DraftId,
+  isSidebarDraftSession,
   useComposerDraftStore,
   type ComposerThreadDraftState,
   type DraftSessionState,
@@ -49,7 +50,7 @@ export function useDraftTerminalLabels(): ReadonlyMap<string, string> {
   const environmentIds = useComposerDraftStore((store) => {
     const ids = new Set<string>();
     for (const session of Object.values(store.draftThreadsByThreadKey)) {
-      if (session.promotedTo == null) ids.add(session.environmentId);
+      if (isSidebarDraftSession(session)) ids.add(session.environmentId);
     }
     return [...ids].toSorted().join("\n");
   });
@@ -202,7 +203,7 @@ function listedDraftComposer(draftId: string | null): ComposerThreadDraftState |
   const store = useComposerDraftStore.getState();
   const session = store.draftThreadsByThreadKey[draftId];
   const composer = store.draftsByThreadKey[draftId];
-  return session && session.promotedTo == null && composer && composerDraftHasUserContent(composer)
+  return isSidebarDraftSession(session) && composer && composerDraftHasUserContent(composer)
     ? composer
     : null;
 }
@@ -229,7 +230,7 @@ export function useSidebarDrafts(
     useShallow((store) => {
       const listed: [string, DraftSessionState][] = [];
       for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
-        if (session.promotedTo != null) continue;
+        if (!isSidebarDraftSession(session)) continue;
         if (
           scopedProjectKeys !== null &&
           !scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)

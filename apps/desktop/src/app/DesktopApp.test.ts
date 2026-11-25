@@ -167,9 +167,7 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         Effect.provideService(DesktopSnapShot.DesktopSnapShot, {
           initialize: Effect.void,
         } as DesktopSnapShot.DesktopSnapShot["Service"]),
-        Effect.provideService(DesktopQuickComposer.DesktopQuickComposer, {
-          initialize: Effect.void,
-        } as DesktopQuickComposer.DesktopQuickComposer["Service"]),
+        Effect.provide(Layer.mock(DesktopQuickComposer.DesktopQuickComposer)({})),
         Effect.provideService(DesktopState.DesktopState, {
           quitting,
         } as DesktopState.DesktopState["Service"]),

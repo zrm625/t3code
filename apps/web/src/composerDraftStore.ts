@@ -123,6 +123,7 @@ export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
+export const QUICK_COMPOSER_DRAFT_ID: DraftId = DraftId.make("quick-composer");
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 
@@ -532,6 +533,13 @@ export interface DraftSessionState {
   /** Standalone drafts (such as Quick Composer) manage their own lifecycle and skip automatic promotion. */
   standalone?: boolean;
   promotedTo?: ScopedThreadRef | null;
+}
+
+/** Draft sessions exposed through the project sidebar. */
+export function isSidebarDraftSession(
+  session: DraftSessionState | undefined,
+): session is DraftSessionState {
+  return session !== undefined && session.promotedTo == null && !session.standalone;
 }
 
 export type DraftThreadState = DraftSessionState;
@@ -1647,7 +1655,8 @@ export function resolveComposerDraftKey(
     for (const [draftId, draftSession] of Object.entries(state.draftThreadsByThreadKey)) {
       if (
         draftSession.environmentId === normalizedTarget.environmentId &&
-        draftSession.threadId === normalizedTarget.threadId
+        draftSession.threadId === normalizedTarget.threadId &&
+        !draftSession.standalone
       ) {
         return draftId;
       }
@@ -2059,7 +2068,10 @@ function normalizePersistedDraftThreads(
               ),
             }
           : {}),
-        ...(candidateDraftThread.standalone === true ? { standalone: true } : {}),
+        // Older builds saved the reserved Quick Composer slot without its standalone flag.
+        ...(candidateDraftThread.standalone === true || threadKey === QUICK_COMPOSER_DRAFT_ID
+          ? { standalone: true }
+          : {}),
         promotedTo,
       };
     }
@@ -2846,6 +2858,7 @@ function toHydratedDraftThreadState(
     ...(persistedDraftThread.worktreeRepositories
       ? { worktreeRepositories: persistedDraftThread.worktreeRepositories }
       : {}),
+    ...(persistedDraftThread.standalone ? { standalone: true } : {}),
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2907,7 +2920,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
           }
           for (const [draftId, draftThread] of Object.entries(state.draftThreadsByThreadKey)) {
-            if (isDraftThreadPromoting(draftThread)) {
+            if (isDraftThreadPromoting(draftThread) || draftThread.standalone) {
               continue;
             }
             if (
@@ -2924,7 +2937,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           for (const draftSession of Object.values(get().draftThreadsByThreadKey)) {
             if (
               draftSession.environmentId === threadRef.environmentId &&
-              draftSession.threadId === threadRef.threadId
+              draftSession.threadId === threadRef.threadId &&
+              !draftSession.standalone
             ) {
               return draftSession;
             }
@@ -2935,7 +2949,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           for (const [draftId, draftSession] of Object.entries(get().draftThreadsByThreadKey)) {
             if (
               draftSession.environmentId === threadRef.environmentId &&
-              draftSession.threadId === threadRef.threadId
+              draftSession.threadId === threadRef.threadId &&
+              !draftSession.standalone
             ) {
               return DraftId.make(draftId);
             }
@@ -2958,7 +2973,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           ),
         hasDraftThreadsInEnvironment: (environmentId) =>
           Object.values(get().draftThreadsByThreadKey).some(
-            (draftThread) => draftThread.environmentId === environmentId,
+            (draftThread) => draftThread.environmentId === environmentId && !draftThread.standalone,
           ),
         setLogicalProjectDraftThreadId: (logicalProjectKey, projectRef, draftId, options) => {
           const normalizedLogicalProjectKey = logicalProjectDraftKey(logicalProjectKey);
@@ -3084,20 +3099,20 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             };
             const existingDraft = state.draftsByThreadKey[draftId];
             let nextDraftsByThreadKey = state.draftsByThreadKey;
-            if (
-              existingThread &&
-              existingThread.environmentId !== projectRef.environmentId &&
-              existingDraft !== undefined
-            ) {
-              const nextDraft = clearStaleFileUploadMetadata(
-                existingDraft,
-                projectRef.environmentId,
-              );
+            if (existingThread && existingDraft) {
+              const environmentChanged = existingThread.environmentId !== projectRef.environmentId;
+              const projectChanged =
+                environmentChanged || existingThread.projectId !== projectRef.projectId;
+              let nextDraft = environmentChanged
+                ? clearStaleFileUploadMetadata(existingDraft, projectRef.environmentId)
+                : existingDraft;
+              if (projectChanged && nextDraft.runtimeMode !== null) {
+                nextDraft = { ...nextDraft, runtimeMode: null };
+              }
               if (nextDraft !== existingDraft) {
-                nextDraftsByThreadKey = {
-                  ...state.draftsByThreadKey,
-                  [draftId]: nextDraft,
-                };
+                nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+                if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[draftId];
+                else nextDraftsByThreadKey[draftId] = nextDraft;
               }
             }
             return {
@@ -3204,6 +3219,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               startFromOrigin: nextStartFromOrigin,
               ...(checkoutPullRequest ? { checkoutPullRequest } : {}),
               ...(worktreeRepositories ? { worktreeRepositories } : {}),
+              ...(existing.standalone ? { standalone: true } : {}),
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =

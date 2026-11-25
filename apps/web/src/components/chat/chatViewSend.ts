@@ -310,9 +310,14 @@ export function restoreComposerDraft(
   const store = useComposerDraftStore.getState();
   const current = store.getComposerDraft(draftTarget);
   const images = snapshot.images.map(cloneComposerImageForRetry);
+  // An image-only message adds no text, so the current prompt gains no trailing blank line.
   store.setPrompt(
     draftTarget,
-    current?.prompt.trim() ? `${current.prompt}\n\n${snapshot.draftText}` : snapshot.draftText,
+    !current?.prompt.trim()
+      ? snapshot.draftText
+      : snapshot.draftText
+        ? `${current.prompt}\n\n${snapshot.draftText}`
+        : current.prompt,
   );
   store.setReplyTo(draftTarget, current?.replyTo ?? snapshot.replyTo);
   store.addImages(draftTarget, images);

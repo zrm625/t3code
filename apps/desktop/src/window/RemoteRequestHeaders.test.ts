@@ -227,7 +227,6 @@ describe("RemoteRequestHeaders", () => {
     >;
     const policy: MainWindowRequestHeaderPolicy = {
       desktopOrigin: "t3code://app",
-      isAllowedWebContentsId: (id) => id === 1 || id === 2,
       isDevelopment: false,
     };
 

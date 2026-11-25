@@ -111,10 +111,12 @@ const decodeServerConfig = Schema.decodeUnknownSync(ServerConfig);
 const makeServerConfig = (
   providers: ReadonlyArray<unknown>,
   supportsIssues = false,
+  environmentId = ENVIRONMENT_ID,
 ): ServerConfig => ({
   ...decodeServerConfig({
     environment: {
       ...descriptor,
+      environmentId,
       capabilities: { ...descriptor.capabilities, issues: supportsIssues },
     },
     auth,
@@ -584,8 +586,8 @@ export const fakeDriver = {
   ): Effect.Effect<EnvironmentConnectionLease, ConnectionAttemptError, Scope.Scope> =>
     Effect.succeed({
       prepared: {
-        environmentId: ENVIRONMENT_ID,
-        label: descriptor.label,
+        environmentId: baseServerConfig.environment.environmentId,
+        label: baseServerConfig.environment.label,
         httpBaseUrl: window.location.origin,
         socketUrl: window.location.origin.replace(/^http/, "ws"),
         httpAuthorization: null,
@@ -600,39 +602,50 @@ export const fakeDriver = {
 export type FakeDriver = typeof fakeDriver;
 
 const realFetch = globalThis.fetch;
-const encodedDescriptor = Schema.encodeSync(ExecutionEnvironmentDescriptor)(
-  Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor)(descriptor),
-);
+const encodeDescriptor = Schema.encodeSync(ExecutionEnvironmentDescriptor);
 
 /** Serves the environment's HTTP API and these threads until disposed. */
 export function installFakeEnvironment(
   fixtures: ReadonlyArray<FakeThread>,
   options?: {
     readonly acceptCommands?: boolean;
+    readonly environmentId?: EnvironmentId;
     readonly keybindings?: ResolvedKeybindingsConfig;
     readonly extraProjects?: ReadonlyArray<Pick<OrchestrationProjectShell, "id" | "title">>;
     /** Commands left unanswered even when accepting, until `rejectPendingCommand`. */
     readonly holdCommand?: (command: OrchestrationV2Command) => boolean;
     readonly providers?: ReadonlyArray<unknown>;
+    readonly projectSettingsOverrides?: ServerConfig["settings"]["projectSettingsOverrides"];
+    /** Offers scratch sessions; serve the project with `extraProjects` titled after the root. */
+    readonly scratchWorkspaceRoot?: string;
+    /** Serves only `extraProjects`, so an environment can start with none. */
+    readonly omitDefaultProject?: boolean;
   },
 ): Disposable {
   threads = fixtures;
+  const config = makeServerConfig(
+    options?.providers ?? [CODEX_PROVIDER],
+    fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
+    options?.environmentId,
+  );
+  const encodedDescriptor = encodeDescriptor(config.environment);
   baseServerConfig = {
-    ...makeServerConfig(
-      options?.providers ?? [CODEX_PROVIDER],
-      fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
-    ),
+    ...config,
+    settings: {
+      ...config.settings,
+      projectSettingsOverrides:
+        options?.projectSettingsOverrides ?? config.settings.projectSettingsOverrides,
+    },
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
+    ...(options?.scratchWorkspaceRoot
+      ? { scratchWorkspaceRoot: options.scratchWorkspaceRoot }
+      : {}),
   };
   dispatched = [];
   acceptCommands = options?.acceptCommands === true;
   projects = [
-    project,
-    ...(options?.extraProjects ?? []).map((extra) => ({
-      ...project,
-      ...extra,
-      workspaceRoot: `/workspace/${extra.title}`,
-    })),
+    ...(options?.omitDefaultProject ? [] : [project]),
+    ...(options?.extraProjects ?? []).map(projectShellOf),
   ];
   holdCommand = options?.holdCommand ?? (() => false);
   globalThis.fetch = async (input, init) => {
@@ -664,6 +677,34 @@ export function installFakeEnvironment(
       pendingDispatches = [];
       pendingAssetUrls = [];
     },
+  };
+}
+
+function projectShellOf(
+  extra: Pick<OrchestrationProjectShell, "id" | "title">,
+): OrchestrationProjectShell {
+  return { ...project, ...extra, workspaceRoot: `/workspace/${extra.title}` };
+}
+
+/** Adds a project, as the server does when one is created after the app connected. */
+export async function emitProject(
+  extra: Pick<OrchestrationProjectShell, "id" | "title">,
+): Promise<void> {
+  if (shellSubscriber === null) throw new Error("No shell subscription");
+  const shell = projectShellOf(extra);
+  projects = [...projects, shell];
+  sequence += 1;
+  await Effect.runPromise(
+    Queue.offer(shellSubscriber, { kind: "project.updated", sequence, project: shell }),
+  );
+}
+
+/** The server's reply to launching a new thread, which has no runs yet. */
+export function launchResult(threadId: ThreadId) {
+  return {
+    threadId,
+    projection: projectionOf({ id: threadId, title: "New thread", runs: [], items: [] }),
+    resumed: false,
   };
 }
 

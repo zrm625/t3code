@@ -16,6 +16,7 @@ import {
   planComposerTurn,
   sendTitleFallbackLabels,
   snapshotComposerSend,
+  type ComposerSendSnapshot,
   withMessageContext,
   makeThreadErrorSetter,
 } from "../ChatView.logic";
@@ -24,6 +25,7 @@ import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
   type EnvironmentId,
+  type ProjectId,
   type ModelSelection,
   type PreviewAnnotationPayload,
   type ResponseContextRecord,
@@ -294,14 +296,39 @@ interface ComposerSendInput {
   }) => Promise<AtomCommandResult<void, unknown>>;
   /** Links a checked-out pull request to its thread; best effort, failures only logged. */
   readonly linkCheckoutPullRequest: (threadRef: ScopedThreadRef, url: string) => void;
-  /** When set, handles Quick Composer acceptance instead of promoting/navigating a main draft. */
-  readonly quickComposerOnAccepted?:
+  /** When set, lets the draft host handle acceptance and navigation. */
+  readonly onDraftSendAccepted?:
     | ((result: {
         readonly environmentId: EnvironmentId;
+        readonly projectId: ProjectId;
         readonly threadId: ThreadId;
         readonly openInMain: boolean;
       }) => void)
     | undefined;
+  /**
+   * When set, a failed send whose draft was replaced meanwhile reports here instead of in a toast
+   * and thread error, so the draft host can keep it beside the new draft.
+   */
+  readonly onRetainedSendFailure?: ((failed: RetainedComposerFailure) => void) | undefined;
+}
+
+/** A failed send the composer could not restore because a newer draft took its place. */
+export interface RetainedComposerFailure {
+  /** Everything the send took from the draft; its images own no preview URLs until restored. */
+  readonly snapshot: ComposerSendSnapshot;
+  /** Where it was sent: its files and context belong to this project's environment. */
+  readonly destination: {
+    readonly environmentId: EnvironmentId;
+    readonly projectId: ProjectId;
+    /** Null for No project. */
+    readonly projectTitle: string | null;
+    readonly envMode: DraftThreadEnvMode;
+    readonly branch: string | null;
+  };
+  /** The send may have reached the server, so retrying could duplicate it. */
+  readonly interrupted: boolean;
+  /** Why the server rejected it; absent when the send was interrupted. */
+  readonly detail: string | null;
 }
 
 /**
@@ -385,7 +412,8 @@ export function useComposerSend(input: ComposerSendInput) {
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
-    quickComposerOnAccepted,
+    onDraftSendAccepted,
+    onRetainedSendFailure,
   } = input;
   const linkedEnvironments = useLinkedEnvironments(environmentId);
   const handleNewThread = useNewThreadHandler();
@@ -1463,7 +1491,7 @@ export function useComposerSend(input: ComposerSendInput) {
       );
     }
     const sentDraftThreadRef =
-      isLocalDraftThread && !quickComposerOnAccepted
+      isLocalDraftThread && !onDraftSendAccepted
         ? scopeThreadRef(environmentId, threadIdForSend)
         : null;
     // Keep new-thread flows from reusing this draft while attachments and worktree setup settle.
@@ -1574,7 +1602,7 @@ export function useComposerSend(input: ComposerSendInput) {
             }
           : undefined;
       const backgroundThreadRef =
-        !quickComposerOnAccepted && submissionIntent === "background" && isLocalDraftThread
+        !onDraftSendAccepted && submissionIntent === "background" && isLocalDraftThread
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       // Read the live session, not the render snapshot: the draft is finalized away once the
@@ -1659,9 +1687,10 @@ export function useComposerSend(input: ComposerSendInput) {
             clearBackgroundDraftSubmissionByRef(sentDraftThreadRef);
           }
         }
-        if (quickComposerOnAccepted) {
-          quickComposerOnAccepted({
+        if (onDraftSendAccepted) {
+          onDraftSendAccepted({
             environmentId,
+            projectId: activeProject.id,
             threadId: threadIdForSend,
             openInMain: submissionIntent === "foreground",
           });
@@ -1688,7 +1717,8 @@ export function useComposerSend(input: ComposerSendInput) {
         ) {
           handleNewThreadInActiveProject();
         }
-        void recordPromptSent(environmentId);
+        // The pop-out is too small for the star prompt, which would cover its send row.
+        if (!onDraftSendAccepted) void recordPromptSent(environmentId);
       }
     }
 
@@ -1710,11 +1740,27 @@ export function useComposerSend(input: ComposerSendInput) {
       });
       // A restored draft clones its images, so the sent copies are no longer used.
       optimisticBlobPreviews.release(optimisticMessage);
-      if (
-        composerDraftHasUserContent(
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
-        )
-      ) {
+      const failureDetail = isAtomCommandInterrupted(failure)
+        ? null
+        : (thrownErrorMessage(squashAtomCommandFailure(failure), m) ??
+          m(msg("Failed to send message.")));
+      const failedDraftKept = composerDraftHasUserContent(
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+      );
+      if (failedDraftKept && onRetainedSendFailure) {
+        onRetainedSendFailure({
+          snapshot: sendSnapshot,
+          destination: {
+            environmentId: activeProject.environmentId,
+            projectId: activeProject.id,
+            projectTitle: activeProjectIsScratch ? null : activeProject.title,
+            envMode: sendEnvMode,
+            branch: activeThreadBranch,
+          },
+          interrupted: isAtomCommandInterrupted(failure),
+          detail: failureDetail,
+        });
+      } else if (failedDraftKept) {
         // A draft typed meanwhile keeps the composer, so the failed text stays reachable here.
         const failedText = sendSnapshot.draftText;
         const hasText = failedText.trim().length > 0;
@@ -1766,12 +1812,9 @@ export function useComposerSend(input: ComposerSendInput) {
           });
         }
       }
-      if (!isAtomCommandInterrupted(failure)) {
-        const error = squashAtomCommandFailure(failure);
-        setThreadError(
-          threadIdForSend,
-          thrownErrorMessage(error, m) ?? m(msg("Failed to send message.")),
-        );
+      // A kept Quick Composer failure carries its own detail, so it is reported only once.
+      if (failureDetail !== null && !(failedDraftKept && onRetainedSendFailure)) {
+        setThreadError(threadIdForSend, failureDetail);
         if (
           draftId &&
           (backgroundDraftOpened || currentRouteThreadKeyRef.current !== routeThreadKey)
@@ -1783,7 +1826,7 @@ export function useComposerSend(input: ComposerSendInput) {
                 submissionIntent === "background"
                   ? m(msg("Background task failed"))
                   : m(msg("Could not start thread")),
-              description: thrownErrorMessage(error, m) ?? m(msg("Failed to send message.")),
+              description: failureDetail,
               actionProps: {
                 children: m(msg("Open draft")),
                 onClick: () => {

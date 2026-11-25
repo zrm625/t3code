@@ -2,10 +2,9 @@ import { EnvironmentId, ProjectId, type ScopedProjectRef } from "@t3tools/contra
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import * as Schema from "effect/Schema";
 
-import { DraftId } from "../../composerDraftStore";
+import type { ComposerSubmissionIntent } from "../../composer-logic";
 import type { Project } from "../../types";
 
-export const QUICK_COMPOSER_DRAFT_ID: DraftId = DraftId.make("quick-composer");
 export const QUICK_COMPOSER_LAST_TARGET_STORAGE_KEY = "t3code:quick-composer-last-target:v1";
 
 const PersistedQuickComposerTarget = Schema.Struct({
@@ -78,4 +77,30 @@ export function resolveInitialQuickComposerTarget(input: {
   }
   const first = projects[0];
   return first ? scopeProjectRef(first.environmentId, first.id) : null;
+}
+
+type QuickComposerKeyEvent = Pick<
+  KeyboardEvent,
+  "key" | "shiftKey" | "metaKey" | "ctrlKey" | "altKey" | "isComposing" | "repeat"
+>;
+
+/** Mod+Shift+Enter is Quick Composer's Send and open. */
+function isQuickComposerOpenShortcut(event: QuickComposerKeyEvent): boolean {
+  return (
+    event.key === "Enter" &&
+    event.shiftKey &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    !event.isComposing &&
+    !event.repeat
+  );
+}
+
+/** Quick Composer sends stay in the background; only its Send and open shortcut shows the thread. */
+export function quickComposerSubmissionIntent(
+  event: QuickComposerKeyEvent | null,
+  intent: ComposerSubmissionIntent | null,
+): ComposerSubmissionIntent | null {
+  if (event !== null && isQuickComposerOpenShortcut(event)) return "foreground";
+  return intent === "foreground" ? "background" : intent;
 }

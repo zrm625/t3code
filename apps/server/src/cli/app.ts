@@ -7,9 +7,9 @@ import * as NodeOS from "node:os";
 import {
   DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
   DesktopAppActivationErrorCode,
-  DesktopAppActivationResponse,
+  DesktopAppControlResponse,
   type DesktopAppActivationPlatform,
-  type DesktopAppActivationRequest,
+  type DesktopAppControlRequest,
 } from "@t3tools/contracts";
 import {
   resolveDesktopAppControlAddress,
@@ -30,7 +30,7 @@ import { baseDirFlag } from "./config.ts";
 
 const CLI_RESPONSE_TIMEOUT_MS = 17_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
-const isDesktopAppActivationResponse = Schema.is(DesktopAppActivationResponse);
+const isDesktopAppControlResponse = Schema.is(DesktopAppControlResponse);
 
 export class DesktopAppSshUnsupportedError extends Schema.TaggedError<DesktopAppSshUnsupportedError>()(
   "DesktopAppSshUnsupportedError",
@@ -96,13 +96,13 @@ function isDesktopPlatform(platform: NodeJS.Platform): platform is DesktopAppAct
   return platform === "darwin" || platform === "linux" || platform === "win32";
 }
 
-async function sendDesktopAppActivationRequest(input: {
+async function sendDesktopAppControlRequest(input: {
   readonly address: DesktopAppControlAddress;
   readonly fallbackAddress?: DesktopAppControlAddress;
   readonly userId: number | undefined;
-  readonly request: DesktopAppActivationRequest;
+  readonly request: DesktopAppControlRequest;
   readonly timeoutMs?: number;
-}): Promise<DesktopAppActivationResponse> {
+}): Promise<DesktopAppControlResponse> {
   if (input.address.directory !== null) {
     const stat = await NodeFSP.lstat(input.address.directory);
     if (
@@ -123,7 +123,7 @@ async function sendDesktopAppActivationRequest(input: {
 
     const finish = (
       result:
-        | { readonly type: "success"; readonly response: DesktopAppActivationResponse }
+        | { readonly type: "success"; readonly response: DesktopAppControlResponse }
         | { readonly type: "failure"; readonly error: Error },
     ) => {
       if (settled) return;
@@ -164,7 +164,7 @@ async function sendDesktopAppActivationRequest(input: {
         });
         return;
       }
-      if (!isDesktopAppActivationResponse(parsed)) {
+      if (!isDesktopAppControlResponse(parsed)) {
         finish({ type: "failure", error: new Error("The desktop app response is invalid.") });
         return;
       }
@@ -188,7 +188,7 @@ async function sendDesktopAppActivationRequest(input: {
         clearTimeout(timeout);
         socket.destroy();
         resolve(
-          sendDesktopAppActivationRequest({
+          sendDesktopAppControlRequest({
             address: input.fallbackAddress,
             userId: input.userId,
             request: input.request,
@@ -246,7 +246,7 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     });
   const random = yield* SecureRandom.SecureRandom;
   const requestId = yield* random.uuidV4();
-  const request: DesktopAppActivationRequest = {
+  const request: DesktopAppControlRequest = {
     version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
     requestId,
     type: "open-workspace",
@@ -258,7 +258,7 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
 
   const response = yield* Effect.tryPromise({
     try: () =>
-      sendDesktopAppActivationRequest({
+      sendDesktopAppControlRequest({
         address,
         userId,
         ...(fallbackAddress === undefined ? {} : { fallbackAddress }),
@@ -326,7 +326,7 @@ const runQuickComposerCommand = Effect.fn("cli.quickComposer")(function* (flags:
   const random = yield* SecureRandom.SecureRandom;
   const requestId = yield* random.uuidV4();
   const activationToken = environment.xdgActivationToken?.trim();
-  const request: DesktopAppActivationRequest = {
+  const request: DesktopAppControlRequest = {
     version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
     requestId,
     type: "quick-composer",
@@ -338,7 +338,7 @@ const runQuickComposerCommand = Effect.fn("cli.quickComposer")(function* (flags:
 
   const response = yield* Effect.tryPromise({
     try: () =>
-      sendDesktopAppActivationRequest({
+      sendDesktopAppControlRequest({
         address,
         userId,
         ...(fallbackAddress === undefined ? {} : { fallbackAddress }),

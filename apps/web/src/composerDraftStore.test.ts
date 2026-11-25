@@ -1606,6 +1606,143 @@ describe("composerDraftStore draft promotion", () => {
   });
 });
 
+describe("composerDraftStore standalone slots", () => {
+  const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-standalone"));
+  const sentThreadId = ThreadId.make("thread-sent-from-standalone");
+  const sentThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, sentThreadId);
+  const standaloneDraftId = DraftId.make("quick-composer");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  // Another window can hold a standalone slot whose thread was already sent.
+  it("keeps a standalone draft off the thread it shares an id with", () => {
+    const store = useComposerDraftStore.getState();
+    store.setStandaloneDraftThread(standaloneDraftId, projectRef, { threadId: sentThreadId });
+    store.setPrompt(standaloneDraftId, "Unsent in the pop-out");
+
+    const state = useComposerDraftStore.getState();
+    expect(state.getComposerDraft(sentThreadRef)).toBeNull();
+    expect(state.getDraftSessionByRef(sentThreadRef)).toBeNull();
+    expect(state.getDraftIdByRef(sentThreadRef)).toBeNull();
+    expect(state.getDraftSessionByProjectRef(projectRef)).toBeNull();
+    expect(state.hasDraftThreadsInEnvironment(TEST_ENVIRONMENT_ID)).toBe(false);
+    expect(state.getComposerDraft(standaloneDraftId)?.prompt).toBe("Unsent in the pop-out");
+  });
+
+  it("keeps the pop-out draft private after changing workspace and permissions", () => {
+    const store = useComposerDraftStore.getState();
+    store.setStandaloneDraftThread(standaloneDraftId, projectRef, { threadId: sentThreadId });
+    store.setPrompt(standaloneDraftId, "Private draft");
+    store.setDraftThreadContext(standaloneDraftId, {
+      envMode: "worktree",
+      runtimeMode: "approval-required",
+    });
+
+    const state = useComposerDraftStore.getState();
+    expect(state.getDraftSession(standaloneDraftId)).toMatchObject({
+      envMode: "worktree",
+      runtimeMode: "approval-required",
+      standalone: true,
+    });
+    expect(state.getDraftIdByRef(sentThreadRef)).toBeNull();
+    expect(state.getComposerDraft(sentThreadRef)).toBeNull();
+  });
+
+  async function restartWithStorage(storage: ReturnType<typeof createMemoryStorage>) {
+    vi.stubGlobal("localStorage", storage);
+    vi.resetModules();
+    const restarted = await import("./composerDraftStore");
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    });
+    return restarted;
+  }
+
+  function expectHiddenStandaloneSlot(
+    state: ReturnType<typeof useComposerDraftStore.getState>,
+    draftId: DraftId,
+    prompt: string,
+  ) {
+    expect(state.getDraftSession(draftId)).toMatchObject({ standalone: true });
+    expect(state.getComposerDraft(draftId)?.prompt).toBe(prompt);
+    expect(state.getComposerDraft(sentThreadRef)).toBeNull();
+    expect(state.getDraftSessionByRef(sentThreadRef)).toBeNull();
+    expect(state.getDraftIdByRef(sentThreadRef)).toBeNull();
+    expect(state.getDraftSessionByProjectRef(projectRef)).toBeNull();
+    expect(state.hasDraftThreadsInEnvironment(TEST_ENVIRONMENT_ID)).toBe(false);
+  }
+
+  it("keeps a standalone draft standalone across a restart", async () => {
+    const storage = createMemoryStorage();
+    const before = await restartWithStorage(storage);
+    const store = before.useComposerDraftStore.getState();
+    store.setStandaloneDraftThread(standaloneDraftId, projectRef, { threadId: sentThreadId });
+    store.setPrompt(standaloneDraftId, "Survives a restart");
+    before.flushComposerDraftStorage();
+
+    const after = await restartWithStorage(storage);
+
+    expect(after.QUICK_COMPOSER_DRAFT_ID).toBe(standaloneDraftId);
+    expectHiddenStandaloneSlot(
+      after.useComposerDraftStore.getState(),
+      standaloneDraftId,
+      "Survives a restart",
+    );
+  });
+
+  const savedDraftThread = (ref: ScopedThreadRef) => ({
+    threadId: ref.threadId,
+    environmentId: ref.environmentId,
+    projectId: projectRef.projectId,
+    createdAt: "2026-11-01T00:00:00.000Z",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    envMode: "local",
+    startFromOrigin: false,
+    promotedTo: null,
+  });
+  const savedDraft = (prompt: string) => ({ prompt, attachments: [] });
+
+  // regression: earlier builds saved the Quick Composer slot back without its standalone flag
+  it("recovers the reserved Quick Composer slot saved without its standalone flag", async () => {
+    const storage = createMemoryStorage();
+    const ordinaryDraftId = DraftId.make("draft-ordinary");
+    const ordinaryThreadRef = scopeThreadRef(
+      EnvironmentId.make("environment-ordinary"),
+      ThreadId.make("thread-ordinary"),
+    );
+    storage.setItem(
+      COMPOSER_DRAFT_STORAGE_KEY,
+      JSON.stringify({
+        version: 9,
+        state: {
+          draftsByThreadKey: {
+            [standaloneDraftId]: savedDraft("Lost its flag"),
+            [ordinaryDraftId]: savedDraft("Ordinary draft"),
+          },
+          draftThreadsByThreadKey: {
+            [standaloneDraftId]: savedDraftThread(sentThreadRef),
+            [ordinaryDraftId]: savedDraftThread(ordinaryThreadRef),
+          },
+          logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+        },
+      }),
+    );
+
+    const after = await restartWithStorage(storage);
+    const state = after.useComposerDraftStore.getState();
+
+    expectHiddenStandaloneSlot(state, standaloneDraftId, "Lost its flag");
+    expect(state.getDraftSession(ordinaryDraftId)?.standalone).toBeUndefined();
+    expect(state.getDraftIdByRef(ordinaryThreadRef)).toBe(ordinaryDraftId);
+  });
+});
+
 describe("composerDraftStore modelSelection", () => {
   const threadId = ThreadId.make("thread-model-options");
   const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
