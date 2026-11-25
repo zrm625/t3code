@@ -3622,7 +3622,10 @@ export default function ChatView(props: ChatViewProps) {
   const content = (
     <div
       ref={setWorkspaceLayoutElement}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      className={cn(
+        "relative flex min-h-0 min-w-0 flex-1 overflow-hidden",
+        !isHostedDraft && "bg-background",
+      )}
     >
       {isChromeless ? null : (
         <DeviceSetupDialogHost
@@ -3731,7 +3734,10 @@ export default function ChatView(props: ChatViewProps) {
             />
             <div
               {...conversationArea}
-              className="relative flex min-h-0 flex-1 flex-col bg-background"
+              className={cn(
+                "relative flex min-h-0 flex-1 flex-col",
+                !isHostedDraft && "bg-background",
+              )}
             >
               {isHostedDraft ? null : (
                 <WorkspaceMutationIdContext value={workspaceMutationId}>

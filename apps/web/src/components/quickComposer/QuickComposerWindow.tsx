@@ -420,7 +420,7 @@ export function QuickComposerWindow() {
 
   if (draftSession === null) {
     return (
-      <div className="flex h-dvh w-full flex-col justify-between bg-background p-4">
+      <div className="bg-card text-card-foreground mx-3 my-2 flex h-[calc(100dvh-1rem)] flex-col justify-between rounded-2xl p-4">
         <div className="drag-region flex items-center justify-between gap-2">
           <span className="text-xs font-medium text-muted-foreground">
             <T>Quick Composer</T>
@@ -469,7 +469,7 @@ export function QuickComposerWindow() {
 
   const header = (launchStatus: DraftLaunchState) => (
     <div className="drag-region mb-1 flex items-center justify-between gap-2 sm:mb-2">
-      <div className="flex min-w-0 items-center gap-1.5">
+      <div className="bg-card text-card-foreground flex min-w-0 items-center gap-1.5 rounded-md">
         <Combobox
           items={pickerItems}
           filteredItems={filteredPickerItems}
@@ -527,7 +527,13 @@ export function QuickComposerWindow() {
             ) : null}
             <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
           </ComboboxTrigger>
-          <ComboboxPopup align="start" sideOffset={6} className="w-72">
+          <ComboboxPopup
+            align="start"
+            sideOffset={6}
+            // The pop-out grows after the picker opens. Use the live viewport even if placement
+            // still reports the height from before the native resize.
+            className="w-72 [&_[data-slot=combobox-popup]]:max-h-[min(calc(100dvh-3.5rem),23rem)]"
+          >
             <ComboboxSearchInput
               aria-label={gt("Search projects")}
               placeholder={gt("Search projects…")}
@@ -575,7 +581,7 @@ export function QuickComposerWindow() {
         ) : null}
       </div>
 
-      <div className="flex min-w-0 items-center gap-1">
+      <div className="bg-card text-card-foreground flex min-w-0 items-center gap-1 rounded-md">
         <QuickComposerLaunchStatus {...launchStatus} />
         <Button
           size="icon-xs"
@@ -591,7 +597,7 @@ export function QuickComposerWindow() {
   );
 
   return (
-    <main className="flex h-dvh w-full flex-col overflow-hidden bg-background">
+    <main className="flex h-dvh w-full flex-col overflow-hidden">
       <ProjectPickerOpenContext value={pickerOpen}>
         <ChatView
           key={acceptedSendCount}
@@ -681,7 +687,7 @@ function QuickComposerLane({ laneRef, header, children }: DraftComposerLaneProps
       </div>
       <div
         ref={laneRef}
-        className="scrollbar-gutter-both pointer-events-auto min-h-0 w-full overflow-y-auto px-1.5"
+        className="scrollbar-gutter-both pointer-events-auto min-h-0 w-full overflow-y-auto px-1.5 [--glass-opacity:100%] [&_[data-slot=composer-context-strip]]:rounded-lg"
       >
         {children}
       </div>
