@@ -614,6 +614,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL, input),
     setDraftState: (state) =>
       ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_SET_DRAFT_STATE_CHANNEL, state),
+    resizeHeight: (height) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_RESIZE_HEIGHT_CHANNEL, height),
     acquireMic: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_ACQUIRE_MIC_CHANNEL),
     releaseMic: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_RELEASE_MIC_CHANNEL),
     onEvent: (listener) => {

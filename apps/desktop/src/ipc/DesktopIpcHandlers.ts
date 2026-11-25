@@ -86,6 +86,7 @@ import {
   hideQuickComposer,
   openQuickComposerThreadInMain,
   readyQuickComposer,
+  resizeQuickComposerHeight,
   releaseQuickComposerMic,
   setQuickComposerDraftState,
   setQuickComposerShortcutSuppressed,
@@ -155,6 +156,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(hideQuickComposer);
   yield* ipc.handle(openQuickComposerThreadInMain);
   yield* ipc.handle(setQuickComposerDraftState);
+  yield* ipc.handle(resizeQuickComposerHeight);
   yield* ipc.handle(acquireQuickComposerMic);
   yield* ipc.handle(releaseQuickComposerMic);
   yield* ipc.handle(setConnectionCatalog);

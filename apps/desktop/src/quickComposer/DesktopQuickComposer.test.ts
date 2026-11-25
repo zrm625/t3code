@@ -40,6 +40,9 @@ vi.mock("electron", () => ({
     getDisplayNearestPoint: () => ({
       workArea: { x: 0, y: 0, width: 1920, height: 1080 },
     }),
+    getDisplayMatching: () => ({
+      workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+    }),
   },
   webContents: {
     fromId: (id: number) => liveWebContents.get(id),
@@ -112,7 +115,11 @@ function makeFakeWindow(webContentsId: number) {
     setBounds: (next: typeof bounds) => {
       bounds = next;
     },
+    setSize: (width: number, height: number) => {
+      bounds = { ...bounds, width, height };
+    },
     setVisibleOnAllWorkspaces: vi.fn(),
+    setTitle: vi.fn(),
     show: vi.fn(() => {
       visible = true;
     }),
@@ -310,6 +317,15 @@ describe("DesktopQuickComposer", () => {
               type: "shown",
               autoVoice: true,
             } satisfies DesktopQuickComposerEvent);
+
+            yield* service.resizeHeight(popout.raw.id + 1, 440);
+            expect(popout.raw.getBounds().height).toBe(240);
+            yield* service.resizeHeight(popout.raw.id, 440);
+            expect(popout.raw.getBounds()).toMatchObject({ width: 680, height: 440 });
+            yield* service.resizeHeight(popout.raw.id, 1000);
+            expect(popout.raw.getBounds().height).toBe(540);
+            yield* service.resizeHeight(popout.raw.id, 180);
+            expect(popout.raw.getBounds().height).toBe(240);
 
             // Native OS close routes through the renderer hide handshake so active dictation stops first.
             const closeEvent = popout.emitClose();

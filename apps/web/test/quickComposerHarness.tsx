@@ -31,6 +31,7 @@ export function stubQuickComposerBridge() {
     hide: vi.fn(async () => undefined),
     openThreadInMain: vi.fn(async () => undefined),
     setDraftState: vi.fn(async (_state: DesktopQuickComposerDraftState) => undefined),
+    resizeHeight: vi.fn(async (_height: number) => undefined),
     onEvent: vi.fn(() => () => undefined),
   };
   // Other desktop reads see a host with nothing to report.

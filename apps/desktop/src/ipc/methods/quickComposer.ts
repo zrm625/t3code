@@ -85,6 +85,16 @@ export const setQuickComposerDraftState = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const resizeQuickComposerHeight = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.QUICK_COMPOSER_RESIZE_HEIGHT_CHANNEL,
+  payload: Schema.Int.check(Schema.isGreaterThan(0)),
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.quickComposer.resizeHeight")(function* (height, event) {
+    if (!event) return;
+    yield* (yield* DesktopQuickComposer.DesktopQuickComposer).resizeHeight(event.sender.id, height);
+  }),
+});
+
 export const acquireQuickComposerMic = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.QUICK_COMPOSER_ACQUIRE_MIC_CHANNEL,
   payload: Schema.Void,

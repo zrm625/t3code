@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Hyprland owns the outer window geometry on Wayland.
+import * as NodeChildProcess from "node:child_process";
+
 import {
   DEFAULT_CLIENT_SETTINGS,
   type ClientSettings,
@@ -70,6 +73,7 @@ export class DesktopQuickComposer extends Context.Service<
     readonly hide: Effect.Effect<void>;
     readonly openThreadInMain: (input: DesktopQuickComposerOpenThreadInput) => Effect.Effect<void>;
     readonly setDraftState: (draftState: DesktopQuickComposerDraftState) => Effect.Effect<void>;
+    readonly resizeHeight: (senderWebContentsId: number, height: number) => Effect.Effect<void>;
     readonly acquireMic: (senderWebContentsId: number) => Effect.Effect<boolean>;
     readonly releaseMic: (senderWebContentsId: number) => Effect.Effect<void>;
   }
@@ -102,6 +106,29 @@ function configureMacPanelWindow(window: Electron.BrowserWindow): void {
 function applyWaylandActivationToken(token: string | undefined): void {
   if (!token) return;
   process.env.XDG_ACTIVATION_TOKEN = token;
+}
+
+function resizeHyprlandComposer(title: string, width: number, height: number) {
+  // The renderer can resize its buffer without updating Hyprland's floating window bounds.
+  const command = `
+    local matches = {}
+    for _, window in ipairs(hl.get_windows()) do
+      if window.pid == ${process.pid} and window.title == ${JSON.stringify(title)} then
+        table.insert(matches, window)
+      end
+    end
+    if #matches == 1 then
+      hl.dispatch(hl.dsp.window.resize({
+        window = matches[1], x = ${width}, y = ${height}, relative = false
+      }))
+    end
+  `;
+  return Effect.promise(
+    () =>
+      new Promise<void>((resolve) => {
+        NodeChildProcess.execFile("hyprctl", ["eval", command], { timeout: 1000 }, () => resolve());
+      }),
+  );
 }
 
 function tryRegisterGlobalShortcut(
@@ -293,6 +320,7 @@ export const make = Effect.gen(function* () {
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
     const applicationOrigin = getDesktopOrigin(environment.isDevelopment);
     const applicationUrl = `${getDesktopUrl(environment.isDevelopment)}#/quick-composer`;
+    const title = `${environment.displayName} Quick Composer`;
 
     const window = yield* electronWindow
       .create(
@@ -313,7 +341,7 @@ export const make = Effect.gen(function* () {
           minimizable: false,
           autoHideMenuBar: true,
           backgroundColor: getInitialBackgroundColor(shouldUseDarkColors),
-          title: `${environment.displayName} Quick Composer`,
+          title,
           ...(environment.platform === "darwin" ? { type: "panel" as const } : {}),
           webPreferences: {
             preload: environment.preloadPath,
@@ -336,6 +364,11 @@ export const make = Effect.gen(function* () {
     if (window === null) {
       return Option.none<Electron.BrowserWindow>();
     }
+
+    window.on("page-title-updated", (event) => {
+      event.preventDefault();
+      window.setTitle(title);
+    });
 
     if (environment.platform === "darwin") {
       configureMacPanelWindow(window);
@@ -676,6 +709,27 @@ export const make = Effect.gen(function* () {
         }
       }),
     ),
+    resizeHeight: Effect.fn("desktop.quickComposer.resizeHeight")(function* (
+      senderWebContentsId,
+      height,
+    ) {
+      const target = quickComposerWindow;
+      if (!target || target.isDestroyed() || target.webContents.id !== senderWebContentsId) {
+        return;
+      }
+      const bounds = target.getBounds();
+      const workArea = Electron.screen.getDisplayMatching(bounds).workArea;
+      const nextHeight = Math.min(
+        Math.max(height, QUICK_COMPOSER_DEFAULT_HEIGHT),
+        QUICK_COMPOSER_MAX_HEIGHT,
+        workArea.height,
+      );
+      if (bounds.height === nextHeight) return;
+      target.setSize(bounds.width, nextHeight);
+      if (shortcutMode === "cli-only" && hostEnvironment.HYPRLAND_INSTANCE_SIGNATURE) {
+        yield* resizeHyprlandComposer(target.getTitle(), bounds.width, nextHeight);
+      }
+    }, windowMutex.withPermits(1)),
     acquireMic: Effect.fn("desktop.quickComposer.acquireMic")((senderWebContentsId) =>
       Effect.sync(() => {
         if (micOwner !== null) return micOwner.id === senderWebContentsId;

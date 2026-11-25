@@ -21,7 +21,7 @@ import {
   WifiOffIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { createContext, use, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   composerDraftHasUserContent,
@@ -34,6 +34,7 @@ import { formatShortcutLabel } from "../../keybindings";
 import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
 import { newThreadId } from "../../lib/utils";
 import { setStandaloneDraftProject } from "../../lib/draftWorkspaceDefaults";
+import { observeResize } from "../../lib/observeResize";
 import { seedDraftModelSelection } from "../../lib/seedDraftModelSelection";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import {
@@ -77,6 +78,9 @@ import {
 const NO_PROJECT_VALUE = "__quick-composer:no-project__";
 // Builds before every new slot reserved its own thread id could save the draft id as one.
 const RESERVED_SLOT_THREAD_ID = ThreadId.make(QUICK_COMPOSER_DRAFT_ID);
+const ProjectPickerOpenContext = createContext(false);
+// Fit the picker's 23rem list limit, the header above it, and breathing room below.
+const PROJECT_PICKER_WINDOW_HEIGHT = 440;
 
 const OVERLAY_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="listbox"], [role="menu"]';
 
@@ -187,6 +191,7 @@ export function QuickComposerWindow() {
   }, [hasUnsavedContent, composerActivity.busy]);
 
   const hidePopout = useEffectEvent(async () => {
+    setPickerOpen(false);
     if (composerRef.current?.isDictating()) {
       await composerRef.current.stopDictation().catch(() => undefined);
     }
@@ -587,41 +592,93 @@ export function QuickComposerWindow() {
 
   return (
     <main className="flex h-dvh w-full flex-col overflow-hidden bg-background">
-      <ChatView
-        key={acceptedSendCount}
-        routeKind="draft"
-        draftId={QUICK_COMPOSER_DRAFT_ID}
-        environmentId={draftSession.environmentId}
-        threadId={draftSession.threadId}
-        reserveTitleBarControlInset={false}
-        draftHost={{
-          overlayClassName:
-            "pointer-events-none absolute inset-0 z-20 flex flex-col justify-start pt-2 pb-1 sm:pt-3",
-          Lane: QuickComposerLane,
-          header,
-          notice: recoveryNotice,
-          onFailedMessageKept: keepFailedMessage,
-          composerRef,
-          composerSurface: {
-            defaultSubmissionIntent: "background",
-            keySubmissionIntent: quickComposerSubmissionIntent,
-            onUnhandledEscape: () => void hidePopout(),
-            onActivityChange: setComposerActivity,
-            FooterActions: QuickComposerSendActions,
-          },
-          sendDisabledReason: scratchPending ? gt("Switching to No project") : null,
-          sending: composerActivity.sending,
-          onSendAccepted: handleSendAccepted,
-        }}
-      />
+      <ProjectPickerOpenContext value={pickerOpen}>
+        <ChatView
+          key={acceptedSendCount}
+          routeKind="draft"
+          draftId={QUICK_COMPOSER_DRAFT_ID}
+          environmentId={draftSession.environmentId}
+          threadId={draftSession.threadId}
+          reserveTitleBarControlInset={false}
+          draftHost={{
+            overlayClassName:
+              "pointer-events-none absolute inset-0 z-20 flex flex-col justify-start pt-2 pb-1 sm:pt-3",
+            Lane: QuickComposerLane,
+            header,
+            notice: recoveryNotice,
+            onFailedMessageKept: keepFailedMessage,
+            composerRef,
+            composerSurface: {
+              defaultSubmissionIntent: "background",
+              keySubmissionIntent: quickComposerSubmissionIntent,
+              onUnhandledEscape: () => void hidePopout(),
+              onActivityChange: setComposerActivity,
+              FooterActions: QuickComposerSendActions,
+            },
+            sendDisabledReason: scratchPending ? gt("Switching to No project") : null,
+            sending: composerActivity.sending,
+            onSendAccepted: handleSendAccepted,
+          }}
+        />
+      </ProjectPickerOpenContext>
     </main>
   );
 }
 
 function QuickComposerLane({ laneRef, header, children }: DraftComposerLaneProps) {
+  const pickerOpen = use(ProjectPickerOpenContext);
+  const headerRef = useRef<HTMLDivElement>(null);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- sizes the native window from the unconstrained composer content and picker
+  useEffect(() => {
+    const header = headerRef.current;
+    const content = header?.parentElement?.querySelector('[data-chat-composer-stack="true"]');
+    if (!header || !content) return;
+    let lastHeight = 0;
+    let lastShortViewport = 0;
+    const reportHeight = (height: number) => {
+      void window.desktopBridge?.quickComposer?.resizeHeight?.(height).catch(() => undefined);
+    };
+    const measure = () => {
+      const contentBottom =
+        header.getBoundingClientRect().bottom + content.getBoundingClientRect().height;
+      const height = Math.max(
+        Math.ceil(contentBottom + 8),
+        pickerOpen ? PROJECT_PICKER_WINDOW_HEIGHT : 0,
+      );
+      if (height === lastHeight) return;
+      lastHeight = height;
+      lastShortViewport = 0;
+      reportHeight(height);
+    };
+    const correctShortViewport = () => {
+      // A Wayland remap can apply the compositor's initial size after the shown event.
+      const height = window.innerHeight;
+      if (height >= lastHeight || height === lastShortViewport) return;
+      lastShortViewport = height;
+      reportHeight(lastHeight);
+    };
+    measure();
+    const stopObserving = observeResize([header, content], measure);
+    const unsubscribe = window.desktopBridge?.quickComposer?.onEvent((event) => {
+      if (event.type === "shown") {
+        lastHeight = 0;
+        measure();
+      }
+    });
+    window.addEventListener("resize", correctShortViewport);
+    return () => {
+      window.removeEventListener("resize", correctShortViewport);
+      unsubscribe?.();
+      stopObserving();
+    };
+  }, [pickerOpen]);
+
   return (
     <>
-      <div className="pointer-events-auto shrink-0 px-3">{header}</div>
+      <div ref={headerRef} className="pointer-events-auto shrink-0 px-3">
+        {header}
+      </div>
       <div
         ref={laneRef}
         className="scrollbar-gutter-both pointer-events-auto min-h-0 w-full overflow-y-auto px-1.5"
