@@ -24,6 +24,7 @@ import {
 } from "../../composerDraftStore";
 import { formatShortcutLabel } from "../../keybindings";
 import { newThreadId } from "../../lib/utils";
+import { setStandaloneDraftProject } from "../../lib/draftWorkspaceDefaults";
 import { seedDraftModelSelection } from "../../lib/seedDraftModelSelection";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import {
@@ -80,7 +81,6 @@ export function QuickComposerWindow() {
   const hasDraftContent = useComposerDraftStore((store) =>
     composerDraftHasUserContent(store.getComposerDraft(QUICK_COMPOSER_DRAFT_ID)),
   );
-  const setStandaloneDraftThread = useComposerDraftStore((store) => store.setStandaloneDraftThread);
   const rotateDraftThreadId = useComposerDraftStore((store) => store.rotateDraftThreadId);
 
   const environmentById = new Map(
@@ -127,11 +127,9 @@ export function QuickComposerWindow() {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- initializes the standalone Quick Composer draft store slot once a target project is available
   useEffect(() => {
     if (draftSession !== null || initialTarget === null) return;
-    setStandaloneDraftThread(QUICK_COMPOSER_DRAFT_ID, initialTarget, {
-      threadId: newThreadId(),
-    });
+    setStandaloneDraftProject(QUICK_COMPOSER_DRAFT_ID, initialTarget, newThreadId());
     seedDraftModelSelection(QUICK_COMPOSER_DRAFT_ID, initialTarget);
-  }, [draftSession, initialTarget, setStandaloneDraftThread]);
+  }, [draftSession, initialTarget]);
 
   // Report draft occupancy to the desktop main process so idle teardown only runs when safe.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes draft occupancy to the Electron quick-composer service for idle teardown gating
@@ -199,7 +197,7 @@ export function QuickComposerWindow() {
   }, []);
 
   const selectProjectRef = (projectRef: ScopedProjectRef) => {
-    setStandaloneDraftThread(QUICK_COMPOSER_DRAFT_ID, projectRef);
+    setStandaloneDraftProject(QUICK_COMPOSER_DRAFT_ID, projectRef);
     seedDraftModelSelection(QUICK_COMPOSER_DRAFT_ID, projectRef);
     window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
   };

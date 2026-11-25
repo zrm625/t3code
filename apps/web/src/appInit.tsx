@@ -256,10 +256,13 @@ function startThreadOverlayRetention(router: AppRouter): void {
 }
 
 /**
- * Starts every app-lifetime service once, before the first render, and returns the router.
+ * Starts every app-lifetime service once, before the first render.
  * They run for the life of the page, so their disposers are dropped here.
  */
-export function startAppServices(): AppRouter {
+export function startAppServices(): {
+  readonly router: AppRouter;
+  readonly isQuickComposerSurface: boolean;
+} {
   // Ahead of the history: the provider auth code must leave the address before anything reads it.
   startProviderAuthDelivery();
 
@@ -328,5 +331,5 @@ export function startAppServices(): AppRouter {
     if (isElectron) startDesktopUpdateLaunchNotice();
   }
 
-  return router;
+  return { router, isQuickComposerSurface };
 }

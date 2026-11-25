@@ -1,3 +1,4 @@
+import * as NodeEvents from "node:events";
 import {
   DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
@@ -12,12 +13,12 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import { describe, expect, vi } from "vite-plus/test";
 
-const { registeredShortcuts, liveWebContentsIds, registerMock, unregisterMock } = vi.hoisted(() => {
+const { registeredShortcuts, liveWebContents, registerMock, unregisterMock } = vi.hoisted(() => {
   const registered = new Map<string, () => void>();
-  const liveIds = new Set<number>();
+  const contents = new Map<number, ReturnType<typeof makeMicRenderer>>();
   return {
     registeredShortcuts: registered,
-    liveWebContentsIds: liveIds,
+    liveWebContents: contents,
     registerMock: vi.fn((accelerator: string, handler: () => void) => {
       if (registered.has(accelerator)) return false;
       registered.set(accelerator, handler);
@@ -41,11 +42,7 @@ vi.mock("electron", () => ({
     }),
   },
   webContents: {
-    getAllWebContents: () =>
-      Array.from(liveWebContentsIds, (id) => ({
-        id,
-        isDestroyed: () => false,
-      })),
+    fromId: (id: number) => liveWebContents.get(id),
   },
 }));
 
@@ -58,6 +55,10 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopQuickComposer from "./DesktopQuickComposer.ts";
+
+function makeMicRenderer(id: number) {
+  return Object.assign(new NodeEvents.EventEmitter(), { id, isDestroyed: () => false });
+}
 
 function makeFakeWindow(webContentsId: number) {
   let visible = false;
@@ -102,8 +103,6 @@ function makeFakeWindow(webContentsId: number) {
     on(map, event, wrapped);
   };
 
-  liveWebContentsIds.add(webContentsId);
-
   const window = {
     id: webContentsId,
     isDestroyed: () => destroyed,
@@ -129,7 +128,6 @@ function makeFakeWindow(webContentsId: number) {
       destroyed = true;
       visible = false;
       focused = false;
-      liveWebContentsIds.delete(webContentsId);
       emit(windowListeners, "closed");
     }),
     loadURL: vi.fn(() => {
@@ -184,7 +182,7 @@ function runWithService<A, E>(
   return Effect.scoped(
     Effect.gen(function* () {
       registeredShortcuts.clear();
-      liveWebContentsIds.clear();
+      liveWebContents.clear();
       registerMock.mockClear();
       unregisterMock.mockClear();
 
@@ -352,8 +350,9 @@ describe("DesktopQuickComposer", () => {
   it.effect("arbitrates microphone ownership across windows", () =>
     runWithService("darwin", {}, ({ service }) =>
       Effect.gen(function* () {
-        liveWebContentsIds.add(10);
-        liveWebContentsIds.add(20);
+        const mainRenderer = makeMicRenderer(10);
+        liveWebContents.set(10, mainRenderer);
+        liveWebContents.set(20, makeMicRenderer(20));
 
         expect(yield* service.acquireMic(10)).toBe(true);
         expect(yield* service.acquireMic(20)).toBe(false);
@@ -362,7 +361,21 @@ describe("DesktopQuickComposer", () => {
         yield* service.releaseMic(20);
         expect(yield* service.acquireMic(20)).toBe(false);
 
-        yield* service.releaseMic(10);
+        mainRenderer.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false });
+        mainRenderer.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+        expect(yield* service.acquireMic(20)).toBe(false);
+
+        mainRenderer.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+        expect(yield* service.acquireMic(20)).toBe(true);
+
+        yield* service.releaseMic(20);
+        expect(yield* service.acquireMic(10)).toBe(true);
+        mainRenderer.emit("render-process-gone");
+        expect(yield* service.acquireMic(20)).toBe(true);
+
+        yield* service.releaseMic(20);
+        expect(yield* service.acquireMic(10)).toBe(true);
+        mainRenderer.emit("destroyed");
         expect(yield* service.acquireMic(20)).toBe(true);
       }),
     ),

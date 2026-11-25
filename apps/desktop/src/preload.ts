@@ -16,6 +16,23 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import * as IpcChannels from "./ipc/channels.ts";
 import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
 
+type OpenThreadInMainListener = (input: DesktopQuickComposerOpenThreadInput) => void;
+
+let openThreadInMainListener: OpenThreadInMainListener | null = null;
+let pendingOpenThreadInMain: DesktopQuickComposerOpenThreadInput | null = null;
+
+// A new main window can receive the target before app startup mounts the coordinator.
+ipcRenderer.on(
+  IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL,
+  (_event, input: DesktopQuickComposerOpenThreadInput) => {
+    if (openThreadInMainListener) {
+      openThreadInMainListener(input);
+    } else {
+      pendingOpenThreadInMain = input;
+    }
+  },
+);
+
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
   "started",
@@ -609,13 +626,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.removeListener(IpcChannels.QUICK_COMPOSER_EVENT_CHANNEL, wrappedListener);
     },
     onOpenThreadInMain: (listener) => {
-      const wrappedListener = (_event: Electron.IpcRendererEvent, input: unknown) => {
-        if (typeof input !== "object" || input === null) return;
-        listener(input as DesktopQuickComposerOpenThreadInput);
+      openThreadInMainListener = listener;
+      if (pendingOpenThreadInMain) {
+        const input = pendingOpenThreadInMain;
+        pendingOpenThreadInMain = null;
+        listener(input);
+      }
+      return () => {
+        if (openThreadInMainListener === listener) openThreadInMainListener = null;
       };
-      ipcRenderer.on(IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL, wrappedListener);
-      return () =>
-        ipcRenderer.removeListener(IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL, wrappedListener);
     },
   },
 } satisfies DesktopBridge);

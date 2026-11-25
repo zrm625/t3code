@@ -157,7 +157,7 @@ export const make = Effect.gen(function* () {
   let idleTeardownTimer: ReturnType<typeof setTimeout> | null = null;
   let hideHandshakeTimer: ReturnType<typeof setTimeout> | null = null;
   let previousWindowsHwnd: bigint | null = null;
-  let micOwnerWebContentsId: number | null = null;
+  let micOwner: { readonly id: number; readonly release: () => void } | null = null;
 
   const stateRef = yield* Ref.make<DesktopQuickComposerState>({
     supported: true,
@@ -206,9 +206,6 @@ export const make = Effect.gen(function* () {
     quickComposerReady = false;
     pendingShowEvent = null;
     if (target && !target.isDestroyed()) {
-      if (micOwnerWebContentsId === target.webContents.id) {
-        micOwnerWebContentsId = null;
-      }
       target.destroy();
     }
   };
@@ -395,9 +392,6 @@ export const make = Effect.gen(function* () {
     });
     window.once("closed", () => {
       releaseRemoteRequestHeaders();
-      if (micOwnerWebContentsId === webContentsId) {
-        micOwnerWebContentsId = null;
-      }
       if (quickComposerWindow === window) {
         quickComposerWindow = null;
         windowReadyToShow = false;
@@ -689,23 +683,30 @@ export const make = Effect.gen(function* () {
     ),
     acquireMic: Effect.fn("desktop.quickComposer.acquireMic")((senderWebContentsId) =>
       Effect.sync(() => {
-        if (micOwnerWebContentsId !== null && micOwnerWebContentsId !== senderWebContentsId) {
-          const ownerAlive = Electron.webContents
-            .getAllWebContents()
-            .some((contents) => contents.id === micOwnerWebContentsId && !contents.isDestroyed());
-          if (ownerAlive) {
-            return false;
-          }
-        }
-        micOwnerWebContentsId = senderWebContentsId;
+        if (micOwner !== null) return micOwner.id === senderWebContentsId;
+
+        const contents = Electron.webContents.fromId(senderWebContentsId);
+        if (!contents || contents.isDestroyed()) return false;
+
+        const release = () => {
+          micOwner = null;
+          contents.off("did-start-navigation", onNavigation);
+          contents.off("render-process-gone", release);
+          contents.off("destroyed", release);
+        };
+        const onNavigation = (event: Electron.WebContentsDidStartNavigationEventParams) => {
+          if (event.isMainFrame && !event.isSameDocument) release();
+        };
+        contents.on("did-start-navigation", onNavigation);
+        contents.once("render-process-gone", release);
+        contents.once("destroyed", release);
+        micOwner = { id: senderWebContentsId, release };
         return true;
       }),
     ),
     releaseMic: Effect.fn("desktop.quickComposer.releaseMic")((senderWebContentsId) =>
       Effect.sync(() => {
-        if (micOwnerWebContentsId === senderWebContentsId) {
-          micOwnerWebContentsId = null;
-        }
+        if (micOwner?.id === senderWebContentsId) micOwner.release();
       }),
     ),
   });

@@ -15,11 +15,11 @@ import { chunkLoadState } from "./lib/chunkReloadGuard";
 const stopTrackingKeyboardLayout = trackKeyboardLayout();
 import.meta.hot?.dispose(stopTrackingKeyboardLayout);
 
-const router = startAppServices();
+const { router, isQuickComposerSurface } = startAppServices();
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
-const app = <AppRoot router={router} />;
+const app = <AppRoot router={router} isQuickComposerSurface={isQuickComposerSurface} />;
 
 // Split by runtime to keep Clerk out of local startup and clerk-js out of browser builds.
 const managedAuthShellModule =
