@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 
 import {
+  acquireTrustedAppRemoteRequestHeaderPolicy,
   stripDesktopOriginHeaders,
   type MainWindowRequestHeaderPolicy,
 } from "./RemoteRequestHeaders.ts";
@@ -182,5 +184,62 @@ describe("RemoteRequestHeaders", () => {
         },
       }),
     );
+  });
+
+  it("strips Origin for trusted auxiliary app windows authorized via isAllowedWebContentsId", () => {
+    const policy: MainWindowRequestHeaderPolicy = {
+      ...packagedPolicy,
+      isAllowedWebContentsId: (id) => id === 77,
+    };
+
+    assert.deepEqual(
+      stripDesktopOriginHeaders(policy, {
+        url: "https://remote.example.com/api/test",
+        webContentsId: 77,
+        frame: { parent: null },
+        requestHeaders: {
+          Origin: "t3code://app",
+          "Sec-Fetch-Site": "cross-site",
+          Authorization: "Bearer secret",
+        },
+      }),
+      { Authorization: "Bearer secret" },
+    );
+
+    assert.isUndefined(
+      stripDesktopOriginHeaders(policy, {
+        url: "https://remote.example.com/api/test",
+        webContentsId: 78,
+        frame: { parent: null },
+        requestHeaders: {
+          Origin: "t3code://app",
+          "Sec-Fetch-Site": "cross-site",
+        },
+      }),
+    );
+  });
+
+  it("keeps the session header policy attached until the last trusted app window releases it", () => {
+    const onBeforeSendHeaders = vi.fn();
+    const session = { webRequest: { onBeforeSendHeaders } } as unknown as Pick<
+      import("electron").Session,
+      "webRequest"
+    >;
+    const policy: MainWindowRequestHeaderPolicy = {
+      desktopOrigin: "t3code://app",
+      isDevelopment: false,
+    };
+
+    const releaseMain = acquireTrustedAppRemoteRequestHeaderPolicy(session, 1, policy);
+    const releaseQuickComposer = acquireTrustedAppRemoteRequestHeaderPolicy(session, 2, policy);
+    assert.strictEqual(onBeforeSendHeaders.mock.calls.length, 1);
+
+    releaseMain();
+    releaseMain();
+    assert.strictEqual(onBeforeSendHeaders.mock.calls.length, 1);
+
+    releaseQuickComposer();
+    assert.strictEqual(onBeforeSendHeaders.mock.calls.length, 2);
+    assert.strictEqual(onBeforeSendHeaders.mock.calls[1]?.[0], null);
   });
 });

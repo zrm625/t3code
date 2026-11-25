@@ -14,6 +14,7 @@ import { msg, T, useGT, Var } from "gt-react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
+import { buildThreadRouteParams } from "../threadRoutes";
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
@@ -173,6 +174,16 @@ function RootRouteBranch() {
     return <Outlet />;
   }
 
+  if (pathname === "/quick-composer") {
+    return (
+      <>
+        <ConfirmDialogHost />
+        <WorktreeLayoutApprovalDialogHost />
+        <Outlet />
+      </>
+    );
+  }
+
   // Handle links before onboarding redirects lose them.
   if (hostedPromptLinkLanding !== null) {
     return hostedPromptLinkLanding;
@@ -193,7 +204,12 @@ function RootRouteBranch() {
           <DesktopWebLinkCoordinator />
         </>
       ) : null}
-      {isElectron ? <RunningThreadKeepAlive /> : null}
+      {isElectron ? (
+        <>
+          <RunningThreadKeepAlive />
+          <QuickComposerMainCoordinator />
+        </>
+      ) : null}
       <RelayClientInstallDialog />
       <ConnectOnboardingDialog />
       <SshPasswordPromptDialog />
@@ -413,6 +429,24 @@ function EventRouter({
   useEffect(() => {
     handleWelcome(serverWelcome);
   }, [serverWelcome]);
+
+  return null;
+}
+
+function QuickComposerMainCoordinator() {
+  const navigate = useNavigate();
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to Quick Composer open-in-main events from the Electron bridge
+  useEffect(() => {
+    const bridge = window.desktopBridge?.quickComposer;
+    if (!bridge) return;
+    return bridge.onOpenThreadInMain(({ environmentId, threadId }) => {
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams({ environmentId, threadId }),
+      });
+    });
+  }, [navigate]);
 
   return null;
 }

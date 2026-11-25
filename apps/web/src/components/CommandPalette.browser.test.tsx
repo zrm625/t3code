@@ -1,12 +1,14 @@
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { act, render } from "../../test/render";
+import { act, render, stubGlobal } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
 import { dispatchCommandPalette, useCommandPaletteStore } from "../commandPaletteStore";
 import { LAST_USED_PROJECT_STORAGE_KEY } from "../hooks/useHandleNewThread";
+import { __setClientSettingsForTests } from "../hooks/useSettings";
 import { removeLocalStorageItem } from "../hooks/useLocalStorage";
 import { makeThreadFixture } from "../test-fixtures";
 import type { Project, Thread } from "../types";
@@ -383,5 +385,28 @@ describe("CommandPalette open intents", () => {
 
     await userEvent.keyboard("{Escape}");
     await expect.element(palette).not.toBeInTheDocument();
+  });
+
+  it("opens Quick Composer from the desktop app once it is enabled", async () => {
+    setup();
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, quickComposerEnabled: true });
+    using _settings = {
+      [Symbol.dispose]: () => __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS),
+    };
+    await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+    const toggle = vi.fn(async () => undefined);
+    // Other desktop reads see a host with nothing to report.
+    using _bridge = stubGlobal(
+      "desktopBridge",
+      new Proxy({ quickComposer: { toggle }, getLocalEnvironmentBootstraps: () => [] } as const, {
+        get: (target, key) =>
+          key in target ? target[key as keyof typeof target] : () => undefined,
+      }),
+    );
+
+    openCommandPalette({ query: "Quick Composer" });
+    await page.getByRole("option", { name: "Open Quick Composer" }).click();
+
+    expect(toggle).toHaveBeenCalledOnce();
   });
 });

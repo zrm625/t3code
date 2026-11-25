@@ -7,7 +7,8 @@ const REMOTE_REQUEST_URL_PATTERNS = ["http://*/*", "https://*/*", "ws://*/*", "w
 
 export interface MainWindowRequestHeaderPolicy {
   readonly desktopOrigin: string;
-  readonly mainWebContentsId: number;
+  readonly mainWebContentsId?: number | undefined;
+  readonly isAllowedWebContentsId?: ((webContentsId: number) => boolean) | undefined;
   readonly clerkFrontendApiHostname?: string | undefined;
   readonly devServerOrigin?: string | undefined;
   readonly isDevelopment: boolean;
@@ -92,7 +93,11 @@ export function stripDesktopOriginHeaders(
   policy: MainWindowRequestHeaderPolicy,
   details: MainWindowRequestHeaderDetails,
 ): Record<string, string> | undefined {
-  if (details.webContentsId !== policy.mainWebContentsId) return undefined;
+  const allowed =
+    details.webContentsId !== undefined &&
+    (details.webContentsId === policy.mainWebContentsId ||
+      policy.isAllowedWebContentsId?.(details.webContentsId) === true);
+  if (!allowed) return undefined;
   if (isSubframe(details)) return undefined;
   if (!hasExactDesktopOriginHeader(details.requestHeaders, policy.desktopOrigin)) {
     return undefined;
@@ -112,7 +117,7 @@ export function stripDesktopOriginHeaders(
   return nextHeaders;
 }
 
-export function installMainWindowRemoteRequestHeaderPolicy(
+function installMainWindowRemoteRequestHeaderPolicy(
   session: Pick<Electron.Session, "webRequest">,
   policy: MainWindowRequestHeaderPolicy,
 ): () => void {
@@ -125,5 +130,51 @@ export function installMainWindowRemoteRequestHeaderPolicy(
   );
   return () => {
     session.webRequest.onBeforeSendHeaders(null);
+  };
+}
+
+interface SessionHeaderPolicyLease {
+  readonly owners: Set<number>;
+  readonly detach: () => void;
+}
+
+const sessionHeaderPolicyLeases = new WeakMap<
+  Pick<Electron.Session, "webRequest">,
+  SessionHeaderPolicyLease
+>();
+
+/**
+ * Reference-counts the session header policy across trusted app windows (main + Quick Composer)
+ * so closing the main window on macOS does not detach header stripping for an open Quick Composer.
+ */
+export function acquireTrustedAppRemoteRequestHeaderPolicy(
+  session: Pick<Electron.Session, "webRequest">,
+  ownerWebContentsId: number,
+  policy: Omit<MainWindowRequestHeaderPolicy, "mainWebContentsId" | "isAllowedWebContentsId">,
+): () => void {
+  let lease = sessionHeaderPolicyLeases.get(session);
+  if (lease === undefined) {
+    const owners = new Set<number>();
+    lease = {
+      owners,
+      detach: installMainWindowRemoteRequestHeaderPolicy(session, {
+        ...policy,
+        isAllowedWebContentsId: (id) => owners.has(id),
+      }),
+    };
+    sessionHeaderPolicyLeases.set(session, lease);
+  }
+  lease.owners.add(ownerWebContentsId);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const active = sessionHeaderPolicyLeases.get(session);
+    if (!active) return;
+    active.owners.delete(ownerWebContentsId);
+    if (active.owners.size === 0) {
+      sessionHeaderPolicyLeases.delete(session);
+      active.detach();
+    }
   };
 }

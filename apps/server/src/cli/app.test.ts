@@ -9,7 +9,7 @@ import * as NodePath from "node:path";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import type { DesktopAppActivationRequest } from "@t3tools/contracts";
+import type { DesktopAppControlRequest } from "@t3tools/contracts";
 import { resolveDesktopAppControlAddress } from "@t3tools/shared/desktopAppControl";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
@@ -77,7 +77,7 @@ async function startFakeDesktop(input: {
   readonly stateSubdirectory?: "userdata" | "dev";
   readonly platform: NodeJS.Platform;
   readonly userId: number | undefined;
-  readonly reply?: (request: DesktopAppActivationRequest) => unknown;
+  readonly reply?: (request: DesktopAppControlRequest) => unknown;
 }) {
   const target = resolveDesktopAppControlAddress({
     stateDir: NodePath.join(input.baseDir, input.stateSubdirectory ?? "userdata"),
@@ -93,7 +93,7 @@ async function startFakeDesktop(input: {
     });
   }
 
-  const received: DesktopAppActivationRequest[] = [];
+  const received: DesktopAppControlRequest[] = [];
   const server = NodeNet.createServer((socket) => {
     socket.setEncoding("utf8");
     let buffer = "";
@@ -101,7 +101,7 @@ async function startFakeDesktop(input: {
       buffer += chunk;
       const newline = buffer.indexOf("\n");
       if (newline === -1) return;
-      const request = JSON.parse(buffer.slice(0, newline)) as DesktopAppActivationRequest;
+      const request = JSON.parse(buffer.slice(0, newline)) as DesktopAppControlRequest;
       received.push(request);
       const response = input.reply
         ? input.reply(request)
@@ -298,10 +298,11 @@ describe("t3 app", () => {
         yield* runCli(["app"], { T3CODE_HOME: baseDir });
         yield* runCli(["app", explicitPath, "--base-dir", baseDir]);
 
-        expect(desktop.received.map((request) => request.workspaceRoot)).toEqual([
-          workingDirectory,
-          explicitPath,
-        ]);
+        expect(
+          desktop.received.map((request) =>
+            request.type === "open-workspace" ? request.workspaceRoot : undefined,
+          ),
+        ).toEqual([workingDirectory, explicitPath]);
         expect(desktop.received.every((request) => request.platform === platform)).toBe(true);
       }).pipe(Effect.scoped),
     ),
@@ -399,5 +400,56 @@ describe("t3 app", () => {
           }
         }).pipe(Effect.provideService(HostProcess.HomeDirectory, root), Effect.scoped),
       ),
+  );
+
+  it.effect("t3 quick-composer sends type quick-composer with XDG_ACTIVATION_TOKEN", () =>
+    withTempDirectory("t3-quick-composer-test-", (root) =>
+      Effect.gen(function* () {
+        const baseDir = NodePath.join(root, ".t3");
+        const desktop = yield* fakeDesktop({
+          baseDir,
+          reply: (request) => ({
+            version: 1,
+            requestId: request.requestId,
+            ok: true,
+            type: "quick-composer",
+          }),
+        });
+
+        yield* runCli(["quick-composer", "--base-dir", baseDir], {
+          XDG_ACTIVATION_TOKEN: "wayland-token-123",
+        });
+
+        expect(desktop.received).toHaveLength(1);
+        expect(desktop.received[0]).toMatchObject({
+          type: "quick-composer",
+          activationToken: "wayland-token-123",
+        });
+      }).pipe(Effect.scoped),
+    ),
+  );
+
+  it.effect("t3 quick-composer reports DesktopQuickComposerRequestFailedError when disabled", () =>
+    withTempDirectory("t3-quick-composer-disabled-test-", (root) =>
+      Effect.gen(function* () {
+        const baseDir = NodePath.join(root, ".t3");
+        yield* fakeDesktop({
+          baseDir,
+          reply: (request) => ({
+            version: 1,
+            requestId: request.requestId,
+            ok: false,
+            code: "quick-composer-disabled",
+            message: "Quick Composer is disabled.",
+          }),
+        });
+
+        const error = yield* runCli(["quick-composer", "--base-dir", baseDir]).pipe(Effect.flip);
+        expect(error).toMatchObject({
+          _tag: "DesktopQuickComposerRequestFailedError",
+          code: "quick-composer-disabled",
+        });
+      }).pipe(Effect.scoped),
+    ),
   );
 });

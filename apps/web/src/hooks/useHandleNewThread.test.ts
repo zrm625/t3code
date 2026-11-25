@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { EnvironmentId, ProjectId, RuntimeMode } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, RuntimeMode, ScopedProjectRef } from "@t3tools/contracts";
 
 const testState = vi.hoisted(() => {
   type ProjectFile = { readonly defaultThreadEnvMode?: "local" | "worktree" } | null;
   let completeProjectFileRead: (value: ProjectFile) => void = () => undefined;
   let projectFileRead = Promise.resolve<ProjectFile>(null);
   let draftSession = {
+    environmentId: "environment-ssh",
+    projectId: "project-remote",
+    threadId: "thread-delayed",
     envMode: "local",
     worktreePath: null,
     branch: null as string | null,
@@ -24,6 +27,7 @@ const testState = vi.hoisted(() => {
     readonly promotedTo: null;
     readonly threadId: string;
   } | null = null;
+  let hasStandaloneDraft = false;
   let openDraftRoute: { readonly kind: "draft"; readonly draftId: string } | null = null;
   const router = {
     state: {
@@ -40,22 +44,44 @@ const testState = vi.hoisted(() => {
   const draftStore = {
     getComposerDraft: vi.fn((draftId: string) => ({ draftId })),
     getDraftSessionByLogicalProjectKey: vi.fn(() => storedDraft),
-    getDraftSession: vi.fn(() =>
-      openDraftRoute === null
-        ? { ...draftSession, promotedTo: null, startFromOrigin: false }
-        : {
-            logicalProjectKey: "remote-project",
-            promotedTo: null,
-            threadId: "thread-open",
-            createdAt: "2026-01-01T00:00:00.000Z",
-            runtimeMode: "full-access",
-            interactionMode: "default",
-          },
+    getDraftSession: vi.fn((draftId: string) =>
+      draftId === "quick-composer" && !hasStandaloneDraft
+        ? null
+        : openDraftRoute === null
+          ? { ...draftSession, promotedTo: null, startFromOrigin: false }
+          : {
+              logicalProjectKey: "remote-project",
+              promotedTo: null,
+              threadId: "thread-open",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
     ),
     getDraftThread: vi.fn(() => null),
     applyStickyState: vi.fn(),
     setDraftThreadContext: vi.fn(),
     setLogicalProjectDraftThreadId: vi.fn(),
+    setStandaloneDraftThread: vi.fn(
+      (
+        _draftId: string,
+        projectRef: ScopedProjectRef,
+        options: {
+          envMode: "local" | "worktree";
+          startFromOrigin: boolean;
+          threadId?: string;
+        },
+      ) => {
+        hasStandaloneDraft = true;
+        draftSession = {
+          ...draftSession,
+          ...projectRef,
+          threadId: options.threadId ?? draftSession.threadId,
+          envMode: options.envMode,
+          environmentSelection: undefined,
+        };
+      },
+    ),
     setModelSelection: vi.fn(),
     setPrompt: vi.fn(),
   };
@@ -98,8 +124,12 @@ const testState = vi.hoisted(() => {
       },
     ) {
       storedDraft = nextStoredDraft;
+      hasStandaloneDraft = false;
       openDraftRoute = null;
       draftSession = {
+        environmentId: "environment-ssh",
+        projectId: "project-remote",
+        threadId: "thread-delayed",
         envMode: "local",
         worktreePath: null,
         branch: null,
@@ -117,6 +147,7 @@ const testState = vi.hoisted(() => {
       draftStore.setDraftThreadContext.mockClear();
       draftStore.setLogicalProjectDraftThreadId.mockClear();
       draftStore.setPrompt.mockClear();
+      draftStore.setStandaloneDraftThread.mockClear();
       projectFileRead = new Promise<ProjectFile>((resolve) => {
         completeProjectFileRead = resolve;
       });
@@ -236,6 +267,7 @@ vi.mock("../state/entities", () => {
     defaultModelSelection: null,
   };
   return {
+    readProject: (ref: ScopedProjectRef) => (ref.projectId === project.id ? project : null),
     readProjects: () => [project],
     readThreadShell: () => null,
     readThreadShells: () => [],
@@ -263,9 +295,10 @@ vi.mock("./useSettings", () => ({ getClientSettings: () => ({}) }));
 
 import {
   readPendingWorkspaceDefault,
-  resolveDefaultProjectRef,
-  useNewThreadHandler,
-} from "./useHandleNewThread";
+  setStandaloneDraftProject,
+} from "../lib/draftWorkspaceDefaults";
+
+import { resolveDefaultProjectRef, useNewThreadHandler } from "./useHandleNewThread";
 
 describe.each([
   ["new", null],
@@ -359,6 +392,44 @@ describe.each([
     expect(testState.draftStore.setPrompt.mock.invocationCallOrder[0]).toBeLessThan(
       testState.router.navigate.mock.invocationCallOrder[0] ?? 0,
     );
+  });
+});
+
+describe("standalone draft workspace defaults", () => {
+  const project = {
+    environmentId: "environment-ssh" as EnvironmentId,
+    projectId: "project-remote" as ProjectId,
+  };
+  const otherProject = {
+    environmentId: "environment-primary" as EnvironmentId,
+    projectId: "project-primary" as ProjectId,
+  };
+  const draftId = "quick-composer" as Parameters<typeof setStandaloneDraftProject>[0];
+
+  it("starts Quick Composer with the project's configured worktree and branch source", () => {
+    testState.reset(null, { envMode: "worktree", startFromOrigin: true });
+    setStandaloneDraftProject(draftId, project);
+
+    expect(testState.draftStore.setStandaloneDraftThread).toHaveBeenCalledWith(
+      draftId,
+      project,
+      expect.objectContaining({ envMode: "worktree", startFromOrigin: true }),
+    );
+  });
+
+  it("waits for the new target's project file default after switching projects", async () => {
+    testState.reset(null, { envMode: null, startFromOrigin: false });
+    setStandaloneDraftProject(draftId, otherProject);
+    setStandaloneDraftProject(draftId, project);
+    const pending = readPendingWorkspaceDefault(draftId);
+    expect(pending).not.toBeNull();
+    testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" });
+    await pending;
+
+    expect(testState.draftStore.setDraftThreadContext).toHaveBeenCalledExactlyOnceWith(draftId, {
+      envMode: "worktree",
+      startFromOrigin: false,
+    });
   });
 });
 

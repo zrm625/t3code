@@ -1,7 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
@@ -185,13 +184,14 @@ export const layer = (ipcMain: DesktopIpcMain) =>
     Effect.gen(function* () {
       const electronWindow = yield* ElectronWindow.ElectronWindow;
       return make(ipcMain, (event) =>
-        Effect.map(
-          electronWindow.main,
-          (main) =>
-            Option.isSome(main) &&
-            main.value.webContents.id === event.sender.id &&
-            main.value.webContents.mainFrame === event.senderFrame,
-        ),
+        Effect.gen(function* () {
+          const windows = ElectronWindow.trustedAppWindows(yield* electronWindow.main);
+          return windows.some(
+            (window) =>
+              window.webContents.id === event.sender.id &&
+              window.webContents.mainFrame === event.senderFrame,
+          );
+        }),
       );
     }),
   );

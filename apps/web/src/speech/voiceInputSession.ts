@@ -122,6 +122,7 @@ export class VoiceInputSession {
   private readonly listeners = new Set<() => void>();
   private readonly activityListeners = new Set<() => void>();
   private disposed = false;
+  private holdsDesktopMicLock = false;
   private onSpeechStatus: ((status: EnvironmentSpeechStatus) => void) | undefined;
 
   constructor(key: SessionKey) {
@@ -257,13 +258,17 @@ export class VoiceInputSession {
         if (state.phase !== "recording" && state.phase !== "transcribing")
           this.publishActivity(SILENT_ACTIVITY);
         if (state.phase === "error") {
+          this.releaseDesktopMicLock();
           this.pendingSubmission = null;
           return;
         }
-        if (state.phase === "idle" && this.pendingSubmission !== null) {
-          const pending = this.pendingSubmission;
-          this.pendingSubmission = null;
-          if (pending.text !== undefined) pending.submit(pending.text);
+        if (state.phase === "idle") {
+          this.releaseDesktopMicLock();
+          if (this.pendingSubmission !== null) {
+            const pending = this.pendingSubmission;
+            this.pendingSubmission = null;
+            if (pending.text !== undefined) pending.submit(pending.text);
+          }
         }
       },
     });
@@ -292,21 +297,50 @@ export class VoiceInputSession {
   readonly getActivity = (): VoiceInputSessionActivity => this.activity;
 
   /** Starts recording into `target`, or does nothing while another draft holds the microphone. */
-  start(
+  async start(
     target: VoiceInputTarget,
     onSpeechStatus?: (status: EnvironmentSpeechStatus) => void,
   ): Promise<void> {
-    if (this.disposed) return Promise.resolve();
+    if (this.disposed) return;
     const busyElsewhere =
       voiceInputBlocksSubmission(this.controller.currentState) &&
       this.target?.ownerKey !== target.ownerKey;
-    if (busyElsewhere) return Promise.resolve();
+    if (busyElsewhere) return;
+    const quickComposerBridge =
+      typeof window !== "undefined" ? window.desktopBridge?.quickComposer : undefined;
+    if (quickComposerBridge && !this.holdsDesktopMicLock) {
+      const acquired = await quickComposerBridge.acquireMic().catch(() => true);
+      if (this.disposed) {
+        if (acquired) void quickComposerBridge.releaseMic().catch(() => undefined);
+        return;
+      }
+      if (!acquired) {
+        toastManager.add({
+          type: "warning",
+          title: m(msg("Microphone in use")),
+          description: m(msg("Stop voice dictation in the other T3 Code window first.")),
+        });
+        return;
+      }
+      this.holdsDesktopMicLock = true;
+    }
     this.pendingSubmission = null;
     this.target = target;
     this.onSpeechStatus = onSpeechStatus;
     this.publishActivity(SILENT_ACTIVITY);
     this.publish({ ...this.snapshot, target });
-    return this.controller.start();
+    try {
+      await this.controller.start();
+    } catch (error) {
+      this.releaseDesktopMicLock();
+      throw error;
+    }
+    if (
+      this.controller.currentState.phase === "idle" ||
+      this.controller.currentState.phase === "error"
+    ) {
+      this.releaseDesktopMicLock();
+    }
   }
 
   /** A newly mounted editor for the recording's draft replaces the target that started it. */
@@ -339,6 +373,7 @@ export class VoiceInputSession {
 
   cancel(): void {
     this.pendingSubmission = null;
+    this.releaseDesktopMicLock();
     this.controller.cancel();
   }
 
@@ -350,15 +385,25 @@ export class VoiceInputSession {
   ownerChanged(ownerKey: string): void {
     if (this.target?.ownerKey !== ownerKey || this.target.persistent) return;
     this.pendingSubmission = null;
+    this.releaseDesktopMicLock();
     this.controller.ownerChanged();
   }
 
   dispose(): void {
     this.disposed = true;
     this.pendingSubmission = null;
+    this.releaseDesktopMicLock();
     this.controller.dispose();
     this.listeners.clear();
     this.activityListeners.clear();
+  }
+
+  private releaseDesktopMicLock(): void {
+    if (!this.holdsDesktopMicLock) return;
+    this.holdsDesktopMicLock = false;
+    if (typeof window !== "undefined") {
+      void window.desktopBridge?.quickComposer?.releaseMic().catch(() => undefined);
+    }
   }
 
   private publish(snapshot: VoiceInputSessionSnapshot): void {

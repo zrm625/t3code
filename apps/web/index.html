@@ -12,6 +12,9 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <script>
       (() => {
+        if (window.location?.hash === "#/quick-composer") {
+          document.documentElement.dataset.quickComposer = "";
+        }
         const LIGHT_BACKGROUND = "#ffffff";
         const DARK_BACKGROUND = "#000000";
         const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
@@ -411,6 +414,16 @@
       html.dark body {
         background: #000000;
         color: #f5f5f5;
+      }
+
+      html[data-quick-composer],
+      html[data-quick-composer] body,
+      html[data-quick-composer] #boot-shell:not(:has(> #boot-error)) {
+        background: transparent !important;
+      }
+
+      html[data-quick-composer] #boot-shell:not(:has(> #boot-error)) {
+        visibility: hidden;
       }
 
       #boot-shell {

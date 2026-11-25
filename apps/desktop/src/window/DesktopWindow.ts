@@ -14,6 +14,7 @@ import { msg } from "gt-i18n";
 
 import {
   type DatabaseMigrationProgress,
+  type DesktopQuickComposerOpenThreadInput,
   type DesktopSnapShotEvent,
   DEFAULT_CLIENT_SETTINGS,
 } from "@t3tools/contracts";
@@ -31,6 +32,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   MENU_ACTION_CHANNEL,
+  QUICK_COMPOSER_OPEN_THREAD_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
   TRACKPAD_SCROLL_BEGIN_CHANNEL,
@@ -50,7 +52,7 @@ import { m } from "../i18n/messages.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
-import { installMainWindowRemoteRequestHeaderPolicy } from "./RemoteRequestHeaders.ts";
+import { acquireTrustedAppRemoteRequestHeaderPolicy } from "./RemoteRequestHeaders.ts";
 
 const TITLEBAR_HEIGHT = 40;
 
@@ -154,6 +156,15 @@ export class DesktopWindow extends Context.Service<
     readonly syncAppearance: Effect.Effect<void>;
   }
 >()("@t3tools/desktop/window/DesktopWindow") {}
+
+export class DesktopThreadNavigation extends Context.Service<
+  DesktopThreadNavigation,
+  {
+    readonly open: (
+      input: DesktopQuickComposerOpenThreadInput,
+    ) => Effect.Effect<void, DesktopWindowError>;
+  }
+>()("@t3tools/desktop/window/DesktopWindow/DesktopThreadNavigation") {}
 
 const { logInfo: logWindowInfo, logWarning: logWindowWarning } =
   makeComponentLogger("desktop-window");
@@ -393,7 +404,7 @@ function bindFirstRevealTrigger(
 }
 
 /** @public */
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopState = yield* DesktopState.DesktopState;
   const assets = yield* DesktopAssets.DesktopAssets;
@@ -421,7 +432,6 @@ export const make = Effect.gen(function* () {
     Effect.suspend(() => pendingMainReveals.get(window) ?? electronWindow.reveal(window)),
   );
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
-  let remoteRequestHeaderOwner: Electron.BrowserWindow | null = null;
 
   const dismissConnectingSplash = Effect.gen(function* () {
     const splash = yield* Ref.getAndSet(splashWindowRef, Option.none());
@@ -1055,14 +1065,13 @@ export const make = Effect.gen(function* () {
       void runPromise(revealWhenReady);
     });
 
-    // Desktop IPC only answers the main window, so register it before its renderer can call in.
+    // Desktop IPC only answers trusted app windows, so register main before its renderer can call in.
     yield* electronWindow.setMain(window);
-    remoteRequestHeaderOwner = window;
-    const detachRemoteRequestHeaders = installMainWindowRemoteRequestHeaderPolicy(
+    const releaseRemoteRequestHeaders = acquireTrustedAppRemoteRequestHeaderPolicy(
       window.webContents.session,
+      window.webContents.id,
       {
         desktopOrigin: getDesktopOrigin(environment.isDevelopment),
-        mainWebContentsId: window.webContents.id,
         clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,
         devServerOrigin: Option.getOrUndefined(
           Option.map(environment.devServerUrl, (url) => url.origin),
@@ -1079,10 +1088,7 @@ export const make = Effect.gen(function* () {
       if (!backendHasStarted) mainClosedDuringStartup = true;
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
-      if (remoteRequestHeaderOwner === window) {
-        remoteRequestHeaderOwner = null;
-        detachRemoteRequestHeaders();
-      }
+      releaseRemoteRequestHeaders();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 
@@ -1226,7 +1232,7 @@ export const make = Effect.gen(function* () {
     yield* dispatch;
   });
 
-  return DesktopWindow.of({
+  const desktopWindow = DesktopWindow.of({
     createMain: createMain.pipe(Effect.flatMap(requireWindow)),
     ensureMain: ensureMain.pipe(Effect.flatMap(requireWindow)),
     revealOrCreateMain,
@@ -1309,6 +1315,17 @@ export const make = Effect.gen(function* () {
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
   });
+  return Context.make(DesktopWindow, desktopWindow).pipe(
+    Context.add(DesktopThreadNavigation, {
+      open: Effect.fn("desktop.window.openThread")(function* (input) {
+        yield* Effect.annotateCurrentSpan({
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+        });
+        yield* dispatchRendererEvent(QUICK_COMPOSER_OPEN_THREAD_CHANNEL, input);
+      }),
+    }),
+  );
 });
 
-export const layer = Layer.effect(DesktopWindow, make);
+export const layer = Layer.effectContext(make);

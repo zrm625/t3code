@@ -13,7 +13,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
 import { authCommand } from "./cli/auth.ts";
 import { environmentCommand } from "./cli/environment.ts";
-import { appCommand } from "./cli/app.ts";
+import { appCommand, quickComposerCommand } from "./cli/app.ts";
 import { browserCommand } from "./cli/browser.ts";
 import { pairCommand } from "./cli/pair.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
@@ -87,6 +87,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       startCommand,
       serveCommand,
       appCommand,
+      quickComposerCommand,
       pairCommand,
       authCommand,
       environmentCommand,

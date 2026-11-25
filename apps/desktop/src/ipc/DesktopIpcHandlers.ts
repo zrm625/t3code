@@ -79,6 +79,19 @@ import {
   setSnapShotAnimationDestination,
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
+import {
+  acquireQuickComposerMic,
+  checkQuickComposerShortcut,
+  getQuickComposerState,
+  hideQuickComposer,
+  openQuickComposerThreadInMain,
+  readyQuickComposer,
+  resizeQuickComposerHeight,
+  releaseQuickComposerMic,
+  setQuickComposerDraftState,
+  setQuickComposerShortcutSuppressed,
+  toggleQuickComposer,
+} from "./methods/quickComposer.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
@@ -135,6 +148,17 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setSnapShotAnimationDestination);
   yield* ipc.handle(dismissSnapShotAnimation);
   yield* ipc.handle(acknowledgeSnapShot);
+  yield* ipc.handle(getQuickComposerState);
+  yield* ipc.handle(checkQuickComposerShortcut);
+  yield* ipc.handle(setQuickComposerShortcutSuppressed);
+  yield* ipc.handle(readyQuickComposer);
+  yield* ipc.handle(toggleQuickComposer);
+  yield* ipc.handle(hideQuickComposer);
+  yield* ipc.handle(openQuickComposerThreadInMain);
+  yield* ipc.handle(setQuickComposerDraftState);
+  yield* ipc.handle(resizeQuickComposerHeight);
+  yield* ipc.handle(acquireQuickComposerMic);
+  yield* ipc.handle(releaseQuickComposerMic);
   yield* ipc.handle(setConnectionCatalog);
 
   yield* ipc.handle(discoverSshHosts);

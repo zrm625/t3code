@@ -138,3 +138,29 @@ it("lists empty drafts by terminal label while their terminal exists, active or 
   await expect.element(rows).toHaveAccessibleName("dev, Unsent draft");
   expect(rows.elements()).toHaveLength(1);
 });
+
+it("leaves the Quick Composer's standalone draft out of the sidebar", async () => {
+  const initial = useComposerDraftStore.getState();
+  using _store = {
+    [Symbol.dispose]: () => useComposerDraftStore.setState(initial, true),
+  };
+  useComposerDraftStore.setState({
+    draftsByThreadKey: {},
+    draftThreadsByThreadKey: {},
+    logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+  });
+  const standaloneDraftId = DraftId.make("quick-composer");
+  initial.setStandaloneDraftThread(
+    standaloneDraftId,
+    scopeProjectRef(EnvironmentId.make("standalone-env"), ProjectId.make("standalone-project")),
+    { threadId: ThreadId.make("standalone-thread") },
+  );
+  initial.setPrompt(standaloneDraftId, "Typed in the pop-out");
+
+  await using screen = await render(
+    <ul>
+      <DraftBlock />
+    </ul>,
+  );
+  await expect.element(screen.getByTestId("sidebar-draft-row")).not.toBeInTheDocument();
+});

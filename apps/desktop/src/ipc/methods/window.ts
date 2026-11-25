@@ -43,6 +43,7 @@ import * as ElectronApp from "../../electron/ElectronApp.ts";
 import * as ElectronAudio from "../../electron/ElectronAudio.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../../electron/ElectronMenu.ts";
+import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import * as ElectronShell from "../../electron/ElectronShell.ts";
 import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
@@ -356,10 +357,20 @@ export const showContextMenu = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CONTEXT_MENU_CHANNEL,
   payload: ContextMenuInput,
   result: Schema.NullOr(Schema.String),
-  handler: Effect.fn("desktop.ipc.window.showContextMenu")(function* (input) {
+  handler: Effect.fn("desktop.ipc.window.showContextMenu")(function* (input, event) {
     const electronMenu = yield* ElectronMenu.ElectronMenu;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
-    const window = yield* electronWindow.focusedMainOrFirst;
+    const senderWindow =
+      event === undefined
+        ? Option.none<Electron.BrowserWindow>()
+        : Option.fromNullishOr(
+            ElectronWindow.trustedAppWindows(yield* electronWindow.main).find(
+              (candidate) => candidate.webContents.id === event.sender.id,
+            ),
+          );
+    const window = Option.isSome(senderWindow)
+      ? senderWindow
+      : yield* electronWindow.focusedMainOrFirst;
     if (Option.isNone(window)) {
       return null;
     }
@@ -507,15 +518,20 @@ export const revealWindow = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.window.revealWindow")(function* (_input, event) {
     const electronWindow = yield* ElectronWindow.ElectronWindow;
+    if (event === undefined) return;
     const window = yield* electronWindow.main;
     if (
-      event === undefined ||
-      Option.isNone(window) ||
-      window.value.webContents.id !== event.sender.id
-    ) {
+      !ElectronWindow.trustedAppWindows(window).some(
+        (candidate) => candidate.webContents.id === event.sender.id,
+      )
+    )
+      return;
+    if (Option.isSome(window)) {
+      yield* electronWindow.reveal(window.value);
       return;
     }
-    yield* electronWindow.reveal(window.value);
+    const desktopWindow = yield* DesktopWindow.DesktopWindow;
+    yield* desktopWindow.revealOrCreateMain.pipe(Effect.asVoid, Effect.ignore);
   }),
 });
 

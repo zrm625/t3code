@@ -264,6 +264,7 @@ import { TooltipProvider } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
   DraftId,
+  isSidebarDraftSession,
   useComposerDraftStore,
   usePromotingDraftThreadKeys,
 } from "../composerDraftStore";
@@ -1219,7 +1220,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
-      if (session.promotedTo != null) {
+      if (!isSidebarDraftSession(session)) {
         continue;
       }
       if (

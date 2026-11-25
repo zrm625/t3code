@@ -6,6 +6,8 @@ import type {
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewTabState,
+  DesktopQuickComposerEvent,
+  DesktopQuickComposerOpenThreadInput,
   DesktopSnapShotEvent,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
@@ -13,6 +15,23 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
 import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
+
+type OpenThreadInMainListener = (input: DesktopQuickComposerOpenThreadInput) => void;
+
+let openThreadInMainListener: OpenThreadInMainListener | null = null;
+let pendingOpenThreadInMain: DesktopQuickComposerOpenThreadInput | null = null;
+
+// A new main window can receive the target before app startup mounts the coordinator.
+ipcRenderer.on(
+  IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL,
+  (_event, input: DesktopQuickComposerOpenThreadInput) => {
+    if (openThreadInMainListener) {
+      openThreadInMainListener(input);
+    } else {
+      pendingOpenThreadInMain = input;
+    }
+  },
+);
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -166,6 +185,16 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
+  onClientSettingsChanged: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, settings: unknown) => {
+      if (typeof settings !== "object" || settings === null) return;
+      listener(settings as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IpcChannels.CLIENT_SETTINGS_CHANGED_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.CLIENT_SETTINGS_CHANGED_CHANNEL, wrappedListener);
+    };
+  },
   requestSnapShotPermissions: (includeAccessibility) =>
     ipcRenderer.invoke(IpcChannels.REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL, includeAccessibility),
   getSnapShotState: () => ipcRenderer.invoke(IpcChannels.GET_SNAP_SHOT_STATE_CHANNEL),
@@ -570,6 +599,44 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.on(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrappedListener);
       return () =>
         ipcRenderer.removeListener(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrappedListener);
+    },
+  },
+  quickComposer: {
+    getState: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_GET_STATE_CHANNEL),
+    checkShortcut: (shortcut) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_CHECK_SHORTCUT_CHANNEL, shortcut),
+    setShortcutSuppressed: (suppressed) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_SET_SHORTCUT_SUPPRESSED_CHANNEL, suppressed),
+    ready: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_READY_CHANNEL),
+    toggle: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_TOGGLE_CHANNEL),
+    hide: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_HIDE_CHANNEL),
+    openThreadInMain: (input) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_OPEN_THREAD_CHANNEL, input),
+    setDraftState: (state) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_SET_DRAFT_STATE_CHANNEL, state),
+    resizeHeight: (height) =>
+      ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_RESIZE_HEIGHT_CHANNEL, height),
+    acquireMic: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_ACQUIRE_MIC_CHANNEL),
+    releaseMic: () => ipcRenderer.invoke(IpcChannels.QUICK_COMPOSER_RELEASE_MIC_CHANNEL),
+    onEvent: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, event: unknown) => {
+        if (typeof event !== "object" || event === null) return;
+        listener(event as DesktopQuickComposerEvent);
+      };
+      ipcRenderer.on(IpcChannels.QUICK_COMPOSER_EVENT_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.QUICK_COMPOSER_EVENT_CHANNEL, wrappedListener);
+    },
+    onOpenThreadInMain: (listener) => {
+      openThreadInMainListener = listener;
+      if (pendingOpenThreadInMain) {
+        const input = pendingOpenThreadInMain;
+        pendingOpenThreadInMain = null;
+        listener(input);
+      }
+      return () => {
+        if (openThreadInMainListener === listener) openThreadInMainListener = null;
+      };
     },
   },
 } satisfies DesktopBridge);

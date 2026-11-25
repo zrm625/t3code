@@ -1,6 +1,7 @@
 import {
   memo,
   useEffect,
+  useId,
   useState,
   type MouseEventHandler,
   type PointerEventHandler,
@@ -69,6 +70,16 @@ interface ComposerPrimaryActionsProps {
   hideCompactToggle?: boolean;
   keepFullHistory?: boolean;
   onToggleKeepFullHistory?: () => void;
+  sendPresentation?: {
+    readonly label: string;
+    readonly tooltip: string;
+    readonly renderSecondaryAction: (state: {
+      readonly disabled: boolean;
+      readonly status: string | null;
+      readonly statusId: string | undefined;
+      readonly onPointerDown: PointerEventHandler<HTMLButtonElement> | undefined;
+    }) => ReactNode;
+  };
 }
 
 const formatPendingPrimaryActionLabel = (
@@ -262,9 +273,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   hideCompactToggle = false,
   keepFullHistory = false,
   onToggleKeepFullHistory,
+  sendPresentation,
 }: ComposerPrimaryActionsProps) {
   const gt = useGT();
   const m = useMessages();
+  const sendStatusId = useId();
   const [stopPhase, setStopPhase] = useStopPhase({ runId, canInterrupt, canOperateThread });
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -392,15 +405,17 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
 
   const submitLabel = showResume
     ? gt("Resume thread")
-    : isEditingQueuedMessage
-      ? gt("Update queued message")
-      : compactsBeforeSend
-        ? gt("Compact and send")
-        : isQueuing
-          ? gt("Queue message")
-          : isRunning
-            ? gt("Steer message")
-            : gt("Submit message");
+    : sendPresentation
+      ? sendPresentation.label
+      : isEditingQueuedMessage
+        ? gt("Update queued message")
+        : compactsBeforeSend
+          ? gt("Compact and send")
+          : isQueuing
+            ? gt("Queue message")
+            : isRunning
+              ? gt("Steer message")
+              : gt("Submit message");
   const submitStatus = isEnvironmentUnavailable
     ? gt("Environment disconnected")
     : isSendHeld
@@ -434,9 +449,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       ? gt("Summarize {tokens} tokens of history, then send", { tokens: compactTokens })
       : isRunning && !isEditingQueuedMessage && canSteer
         ? dispatchTooltip
-        : submitLabel);
+        : (sendPresentation?.tooltip ?? submitLabel));
 
   const isBusyOrHeld = isSendBusy || isSendHeld;
+  const sendActionDisabled =
+    isBusyOrHeld ||
+    isSendDisabled ||
+    isEnvironmentUnavailable ||
+    (!hasSendableContent && !showResume);
   const sendButton = (
     <button
       type={showResume ? "button" : "submit"}
@@ -455,13 +475,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         if (showResume) onResume?.();
         else onSubmitMessage?.(event);
       }}
-      disabled={
-        isBusyOrHeld ||
-        isSendDisabled ||
-        isEnvironmentUnavailable ||
-        (!hasSendableContent && !showResume)
-      }
-      aria-label={submitStatus ?? submitLabel}
+      disabled={sendActionDisabled}
+      aria-label={sendPresentation ? submitLabel : (submitStatus ?? submitLabel)}
+      aria-describedby={sendPresentation && submitStatus ? sendStatusId : undefined}
       aria-busy={isBusyOrHeld || undefined}
     >
       {stageBackdropVariant ? (
@@ -496,14 +512,30 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const submit = (
     <Tooltip key="submit">
       <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
-      <TooltipPopup>{submitTooltip}</TooltipPopup>
+      <TooltipPopup align={sendPresentation ? "end" : "center"}>{submitTooltip}</TooltipPopup>
     </Tooltip>
   );
+  const secondaryAction = !showResume
+    ? sendPresentation?.renderSecondaryAction({
+        disabled: sendActionDisabled,
+        status: submitStatus,
+        statusId: submitStatus ? sendStatusId : undefined,
+        onPointerDown: pointerFocusProps?.onPointerDown,
+      })
+    : null;
+  const sendStatus =
+    sendPresentation && submitStatus ? (
+      <span key="send-status" id={sendStatusId} className="sr-only">
+        {submitStatus}
+      </span>
+    ) : null;
   if (compactTokens === null || hideCompactToggle) {
     return withStopButton(
       <>
         {children}
+        {secondaryAction}
         {submit}
+        {sendStatus}
       </>,
     );
   }
@@ -546,7 +578,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </TooltipPopup>
       </Tooltip>
       {children}
+      {secondaryAction}
       {submit}
+      {sendStatus}
     </div>,
   );
 });

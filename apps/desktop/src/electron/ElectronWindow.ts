@@ -133,6 +133,35 @@ export class ElectronWindow extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronWindow") {}
 
+const trustedAuxiliaryWindows = new Map<Electron.BrowserWindow, (() => void) | undefined>();
+
+export function trustAuxiliaryAppWindow(
+  window: Electron.BrowserWindow,
+  closeWithMain?: () => void,
+): () => void {
+  trustedAuxiliaryWindows.set(window, closeWithMain);
+  const unregister = () => {
+    trustedAuxiliaryWindows.delete(window);
+  };
+  window.once("closed", unregister);
+  return unregister;
+}
+
+export function trustedAppWindows(
+  main: Option.Option<Electron.BrowserWindow>,
+): readonly Electron.BrowserWindow[] {
+  const windows = new Set<Electron.BrowserWindow>();
+  if (Option.isSome(main) && !main.value.isDestroyed()) windows.add(main.value);
+  for (const window of trustedAuxiliaryWindows.keys()) {
+    if (!window.isDestroyed()) windows.add(window);
+  }
+  return [...windows];
+}
+
+export function closeAppWindowsWithMain(): void {
+  for (const close of trustedAuxiliaryWindows.values()) close?.();
+}
+
 /** @public */
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
@@ -210,7 +239,11 @@ export const make = Effect.gen(function* () {
           cause,
         }),
     }).pipe(Effect.orDie);
-    if (Option.isSome(focused) && !(yield* isWindowDestroyed(focused.value))) {
+    if (
+      Option.isSome(focused) &&
+      !auxiliaryWindows.has(focused.value) &&
+      !(yield* isWindowDestroyed(focused.value))
+    ) {
       return focused;
     }
     return yield* currentMainOrFirst;
@@ -259,16 +292,13 @@ export const make = Effect.gen(function* () {
     setMain: Effect.fn("ElectronWindow.setMain")(function (window) {
       return Ref.set(mainWindowRef, Option.some(window));
     }),
-    clearMain: Effect.fn("ElectronWindow.clearMain")(function (window) {
-      return Ref.update(mainWindowRef, (current) => {
-        if (Option.isNone(current)) {
-          return current;
-        }
-        if (Option.isSome(window) && current.value !== window.value) {
-          return current;
-        }
-        return Option.none();
+    clearMain: Effect.fn("ElectronWindow.clearMain")(function* (window) {
+      const cleared = yield* Ref.modify(mainWindowRef, (current) => {
+        const matches =
+          Option.isSome(current) && (Option.isNone(window) || current.value === window.value);
+        return [matches, matches ? Option.none() : current];
       });
+      if (cleared) closeAppWindowsWithMain();
     }),
     prepareReveal: Effect.fn("ElectronWindow.prepareReveal")(function (window) {
       return Effect.promise(async () => {
