@@ -74,6 +74,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  PictureInPicture2Icon,
   RotateCcwIcon,
   SettingsIcon,
   MonitorIcon,
@@ -1397,6 +1398,18 @@ function OpenCommandPaletteDialog(props: {
       icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "chat.newWithoutProject",
       run: () => startScratchThread(scratchTargetEnvironmentId),
+    });
+  }
+
+  const quickComposerBridge = window.desktopBridge?.quickComposer;
+  if (clientSettings.quickComposerEnabled && quickComposerBridge) {
+    actionItems.push({
+      kind: "action",
+      value: "action:open-quick-composer",
+      searchTerms: ["quick composer", "pop out", "floating", "composer", "new thread"],
+      title: gt("Open Quick Composer"),
+      icon: <PictureInPicture2Icon className={ITEM_ICON_CLASS} />,
+      run: () => quickComposerBridge.toggle(),
     });
   }
 

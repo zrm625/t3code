@@ -21,11 +21,8 @@ export function quickComposerStatus(
 ): string | undefined {
   if (!state) return undefined;
   if (!enabled) return undefined;
-  if (state.mode === "cli-only") {
-    return resolve(
-      msg("Bind the command below in your Wayland compositor to toggle Quick Composer."),
-    );
-  }
+  // The shortcut row below already explains the compositor binding.
+  if (state.mode === "cli-only") return undefined;
   if (state.message) return state.message;
   if (state.shortcutRegistered) {
     return resolve(msg("Global shortcut active ({shortcut}).", { shortcut: formattedShortcut }));

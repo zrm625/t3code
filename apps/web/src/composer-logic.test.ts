@@ -17,6 +17,7 @@ import {
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
   composerSubmissionIntentForKey,
+  quickComposerSubmissionIntent,
   composerStateAtPromptEnd,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
@@ -92,6 +93,36 @@ describe("formatAssistantCitationForComposer", () => {
     expect(text).toBe(`${serializeAssistantCitation(boundCitation)} `);
     expect(collectAssistantCitations(text).map((entry) => entry.citation)).toEqual([boundCitation]);
     expect(expandAssistantCitationsForProvider(text)).toMatch(/^\[assistant-quote-1\] \n\n/);
+  });
+});
+
+describe("quickComposerSubmissionIntent", () => {
+  const enter = {
+    key: "Enter",
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    isComposing: false,
+    repeat: false,
+  };
+
+  it("keeps plain sends in the background and opens only on Mod+Shift+Enter", () => {
+    expect(quickComposerSubmissionIntent(enter, "foreground")).toBe("background");
+    expect(quickComposerSubmissionIntent(null, "foreground")).toBe("background");
+    expect(quickComposerSubmissionIntent(enter, null)).toBeNull();
+    expect(
+      quickComposerSubmissionIntent({ ...enter, ctrlKey: true, shiftKey: true }, "background"),
+    ).toBe("foreground");
+    expect(quickComposerSubmissionIntent({ ...enter, metaKey: true, shiftKey: true }, null)).toBe(
+      "foreground",
+    );
+  });
+
+  it("leaves IME composition and key repeat to the resolved intent", () => {
+    const open = { ...enter, ctrlKey: true, shiftKey: true };
+    expect(quickComposerSubmissionIntent({ ...open, isComposing: true }, null)).toBeNull();
+    expect(quickComposerSubmissionIntent({ ...open, repeat: true }, null)).toBeNull();
   });
 });
 

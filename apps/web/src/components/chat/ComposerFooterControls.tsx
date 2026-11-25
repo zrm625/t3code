@@ -8,7 +8,7 @@ import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import { focusRequestedPermission, useComposerMenuProps } from "./composerEventScope";
-import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import { ComposerPrimaryActions, type QuickComposerSendAndOpen } from "./ComposerPrimaryActions";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { resolveRuntimeModeOption, runtimeModeConfig } from "./runtimeModeConfig";
@@ -226,6 +226,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   hideCompactToggle: boolean;
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
+  sendAndOpen?: QuickComposerSendAndOpen | null;
 }) {
   return (
     <>
@@ -257,6 +258,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         hideCompactToggle={props.hideCompactToggle}
         keepFullHistory={props.keepFullHistory}
         onToggleKeepFullHistory={props.onToggleKeepFullHistory}
+        sendAndOpen={props.sendAndOpen ?? null}
       >
         {props.children}
       </ComposerPrimaryActions>

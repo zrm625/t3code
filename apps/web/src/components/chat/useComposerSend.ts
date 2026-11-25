@@ -24,6 +24,7 @@ import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
   type EnvironmentId,
+  type ProjectId,
   type ModelSelection,
   type PreviewAnnotationPayload,
   type ResponseContextRecord,
@@ -298,6 +299,7 @@ interface ComposerSendInput {
   readonly quickComposerOnAccepted?:
     | ((result: {
         readonly environmentId: EnvironmentId;
+        readonly projectId: ProjectId;
         readonly threadId: ThreadId;
         readonly openInMain: boolean;
       }) => void)
@@ -1662,6 +1664,7 @@ export function useComposerSend(input: ComposerSendInput) {
         if (quickComposerOnAccepted) {
           quickComposerOnAccepted({
             environmentId,
+            projectId: activeProject.id,
             threadId: threadIdForSend,
             openInMain: submissionIntent === "foreground",
           });
@@ -1688,7 +1691,8 @@ export function useComposerSend(input: ComposerSendInput) {
         ) {
           handleNewThreadInActiveProject();
         }
-        void recordPromptSent(environmentId);
+        // The pop-out is too small for the star prompt, which would cover its send row.
+        if (!quickComposerOnAccepted) void recordPromptSent(environmentId);
       }
     }
 

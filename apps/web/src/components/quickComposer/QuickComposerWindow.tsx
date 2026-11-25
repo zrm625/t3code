@@ -1,28 +1,28 @@
 import {
   resolveEnvironmentMachineKind,
   type EnvironmentId,
+  type ProjectId,
   type ScopedProjectRef,
-  type ThreadId,
+  ThreadId,
 } from "@t3tools/contracts";
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  scopedProjectKey,
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
-import { T, useGT, Var } from "gt-react";
-import {
-  ArrowUpRightIcon,
-  ChevronDownIcon,
-  MessageSquareDashedIcon,
-  WifiOffIcon,
-  XIcon,
-} from "lucide-react";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { T, useGT } from "gt-react";
+import { ChevronDownIcon, MessageSquareDashedIcon, WifiOffIcon, XIcon } from "lucide-react";
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   composerDraftHasUserContent,
   flushComposerDraftStorage,
+  QUICK_COMPOSER_DRAFT_ID,
   useComposerDraftStore,
 } from "../../composerDraftStore";
-import { formatShortcutLabel } from "../../keybindings";
 import { newThreadId } from "../../lib/utils";
 import { setStandaloneDraftProject } from "../../lib/draftWorkspaceDefaults";
 import { seedDraftModelSelection } from "../../lib/seedDraftModelSelection";
@@ -35,10 +35,12 @@ import { useProjects } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import ChatView from "../ChatView";
 import type { ChatComposerHandle } from "../chat/ChatComposer";
+import { draftSendState } from "../chat/chatViewSend";
 import { useSortedProjectGroups } from "../CommandPaletteLookups";
 import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button, InlineButton } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import {
   Combobox,
   ComboboxEmpty,
@@ -49,15 +51,26 @@ import {
   ComboboxTrigger,
   useComboboxFilter,
 } from "../ui/combobox";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
-  QUICK_COMPOSER_DRAFT_ID,
   readLastQuickComposerTarget,
   resolveInitialQuickComposerTarget,
   writeLastQuickComposerTarget,
 } from "./quickComposer.logic";
 
 const NO_PROJECT_VALUE = "__quick-composer:no-project__";
+// Builds before every new slot reserved its own thread id could save the draft id as one.
+const RESERVED_SLOT_THREAD_ID = ThreadId.make(QUICK_COMPOSER_DRAFT_ID);
+
+const OVERLAY_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="listbox"], [role="menu"]';
+
+// Closed selects and menus can stay mounted without a box, so only an overlay on screen owns Escape.
+function hasVisibleOverlay(): boolean {
+  for (const element of document.querySelectorAll(OVERLAY_SELECTOR)) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return true;
+  }
+  return false;
+}
 
 interface PickerItem {
   readonly value: string;
@@ -73,6 +86,12 @@ export function QuickComposerWindow() {
   const composerRef = useRef<ChatComposerHandle | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
+  // Remounts ChatView per accepted send so the sent thread's setup and dispatch state stay behind.
+  const [acceptedSendCount, setAcceptedSendCount] = useState(0);
+  // Opening the scratch project is a server round trip; a later choice supersedes its result.
+  const scratchRequestRef = useRef(0);
+  const [scratchPending, setScratchPending] = useState(false);
+  const [composerActivity, setComposerActivity] = useState({ busy: false, sending: false });
   const pickerFilter = useComboboxFilter();
 
   const draftSession = useComposerDraftStore((store) =>
@@ -124,23 +143,25 @@ export function QuickComposerWindow() {
         })
       : null;
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- initializes the standalone Quick Composer draft store slot once a target project is available
+  const slotThreadReserved = draftSession?.threadId === RESERVED_SLOT_THREAD_ID;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- initializes the standalone Quick Composer draft store slot once a target project is available, and moves a saved slot off the draft id it once used as its thread id
   useEffect(() => {
+    if (slotThreadReserved) {
+      rotateDraftThreadId(QUICK_COMPOSER_DRAFT_ID, newThreadId());
+      return;
+    }
     if (draftSession !== null || initialTarget === null) return;
-    setStandaloneDraftProject(QUICK_COMPOSER_DRAFT_ID, initialTarget, newThreadId());
+    setStandaloneDraftProject(QUICK_COMPOSER_DRAFT_ID, initialTarget);
     seedDraftModelSelection(QUICK_COMPOSER_DRAFT_ID, initialTarget);
-  }, [draftSession, initialTarget]);
+  }, [draftSession, initialTarget, rotateDraftThreadId, slotThreadReserved]);
 
   // Report draft occupancy to the desktop main process so idle teardown only runs when safe.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes draft occupancy to the Electron quick-composer service for idle teardown gating
   useEffect(() => {
     void window.desktopBridge?.quickComposer
-      ?.setDraftState({
-        hasContent: hasDraftContent,
-        busy: composerRef.current?.isDictating() === true,
-      })
+      ?.setDraftState({ hasContent: hasDraftContent, busy: composerActivity.busy })
       .catch(() => undefined);
-  }, [hasDraftContent]);
+  }, [hasDraftContent, composerActivity.busy]);
 
   const hidePopout = useEffectEvent(async () => {
     if (composerRef.current?.isDictating()) {
@@ -180,52 +201,73 @@ export function QuickComposerWindow() {
     return unsubscribe;
   }, []);
 
+  // Read before any popup sees the key: one that closes on this Escape has used it.
+  const overlayOwnedEscapeRef = useRef(false);
+  const handleGlobalKeyDownCapture = useEffectEvent((event: KeyboardEvent) => {
+    if (event.key === "Escape") overlayOwnedEscapeRef.current = hasVisibleOverlay();
+  });
   // Hide on Escape when idle and no overlay/combobox/dialog owns Escape.
   const handleGlobalKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
-    if (pickerOpen) return;
+    if (pickerOpen || overlayOwnedEscapeRef.current) return;
     if (composerRef.current?.isModelPickerOpen() || composerRef.current?.isDictating()) return;
-    if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="listbox"]')) return;
     event.preventDefault();
     void hidePopout();
   });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers a window-level Escape listener to dismiss the Quick Composer overlay
   useEffect(() => {
+    window.addEventListener("keydown", handleGlobalKeyDownCapture, true);
     window.addEventListener("keydown", handleGlobalKeyDown);
-    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeyDownCapture, true);
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
   }, []);
 
+  // A send owns its destination until it is accepted or its draft is restored. The ref covers the
+  // awaits before the composer reports the send; the reported state covers the renders after.
+  const destinationLocked = () =>
+    composerActivity.sending ||
+    (draftSession !== null &&
+      draftSendState(
+        scopedThreadKey(scopeThreadRef(draftSession.environmentId, draftSession.threadId)),
+      ).sendInFlight.current);
+
   const selectProjectRef = (projectRef: ScopedProjectRef) => {
+    scratchRequestRef.current += 1;
+    setScratchPending(false);
     setStandaloneDraftProject(QUICK_COMPOSER_DRAFT_ID, projectRef);
     seedDraftModelSelection(QUICK_COMPOSER_DRAFT_ID, projectRef);
     window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
   };
 
   const selectNoProject = async () => {
+    if (destinationLocked()) return;
     const targetEnvId = scratchEnvironmentId(
       activeProjectRef?.environmentId ?? primaryEnvironmentId ?? null,
     );
     if (targetEnvId === null) return;
+    const request = ++scratchRequestRef.current;
+    setScratchPending(true);
     const scratch = await openScratchProject(targetEnvId);
+    if (request !== scratchRequestRef.current) return;
+    setScratchPending(false);
+    // A failure was already reported; the current project and draft stay as they were.
     if (!scratch) return;
     selectProjectRef(scopeProjectRef(scratch.environmentId, scratch.id));
   };
 
   const handleSendAccepted = (result: {
     readonly environmentId: EnvironmentId;
+    readonly projectId: ProjectId;
     readonly threadId: ThreadId;
     readonly openInMain: boolean;
   }) => {
-    const session = useComposerDraftStore.getState().getDraftSession(QUICK_COMPOSER_DRAFT_ID);
-    if (session) {
-      writeLastQuickComposerTarget(scopeProjectRef(session.environmentId, session.projectId));
-    }
+    writeLastQuickComposerTarget(scopeProjectRef(result.environmentId, result.projectId));
     rotateDraftThreadId(QUICK_COMPOSER_DRAFT_ID, newThreadId());
+    setAcceptedSendCount((count) => count + 1);
     flushComposerDraftStorage();
-    void window.desktopBridge?.quickComposer
-      ?.setDraftState({ hasContent: false, busy: false })
-      .catch(() => undefined);
     if (result.openInMain) {
       void window.desktopBridge?.quickComposer
         ?.openThreadInMain({
@@ -249,6 +291,10 @@ export function QuickComposerWindow() {
   const activeProjectIsScratch =
     activeProject !== null &&
     isScratchProject(activeProject, scratchWorkspaceRootFor(activeProject.environmentId));
+  const activeProjectLabel = activeProjectIsScratch
+    ? gt("No project")
+    : (activeProject?.title ?? null);
+  const triggerLabel = scratchPending ? gt("No project") : activeProjectLabel;
   const activeEnvironment =
     activeProjectRef !== null
       ? (environmentById.get(activeProjectRef.environmentId) ?? null)
@@ -310,7 +356,8 @@ export function QuickComposerWindow() {
           </p>
           <div className="flex items-center gap-2">
             {scratchAvailable ? (
-              <Button size="sm" onClick={() => void selectNoProject()}>
+              <Button size="sm" disabled={scratchPending} onClick={() => void selectNoProject()}>
+                {scratchPending ? <Spinner /> : null}
                 <T>Start without project</T>
               </Button>
             ) : null}
@@ -332,7 +379,7 @@ export function QuickComposerWindow() {
     );
   }
 
-  const header = (
+  const header = (launchStatus: ReactNode) => (
     <div className="drag-region mb-2 flex items-center justify-between gap-2">
       <div className="flex min-w-0 items-center gap-1.5">
         <Combobox
@@ -347,8 +394,9 @@ export function QuickComposerWindow() {
             setPickerQuery("");
           }}
           value={selectedPickerItem}
+          disabled={composerActivity.sending}
           onValueChange={(item) => {
-            if (!item) return;
+            if (!item || destinationLocked()) return;
             setPickerOpen(false);
             if (item.value === NO_PROJECT_VALUE) {
               void selectNoProject();
@@ -362,20 +410,27 @@ export function QuickComposerWindow() {
           }}
         >
           <ComboboxTrigger
-            render={<InlineButton tone="picker" />}
-            aria-label={gt("Choose project")}
+            render={<InlineButton tone="picker" className="min-h-6" />}
+            aria-busy={scratchPending || undefined}
+            aria-label={
+              scratchPending
+                ? gt("Choose project, switching to: {project}", { project: gt("No project") })
+                : activeProjectLabel === null
+                  ? gt("Choose project")
+                  : gt("Choose project, current: {project}", { project: activeProjectLabel })
+            }
           >
-            {activeProjectIsScratch ? (
+            {scratchPending ? (
+              <Spinner size="sm" tone="muted" className="shrink-0" />
+            ) : activeProjectIsScratch ? (
               <MessageSquareDashedIcon className="size-3.5 shrink-0 text-muted-foreground" />
             ) : activeProject ? (
               <ProjectFavicon project={activeProject} className="size-3.5 shrink-0" />
             ) : null}
             <span className="max-w-56 truncate text-xs font-medium">
-              {activeProjectIsScratch
-                ? gt("No project")
-                : (activeProject?.title ?? gt("Choose project"))}
+              {triggerLabel ?? gt("Choose project")}
             </span>
-            {showProjectEnvironments && activeProjectGroup ? (
+            {showProjectEnvironments && activeProjectGroup && !scratchPending ? (
               <ProjectEnvironmentBadge
                 group={activeProjectGroup}
                 primaryEnvironmentId={primaryEnvironmentId}
@@ -386,6 +441,7 @@ export function QuickComposerWindow() {
           </ComboboxTrigger>
           <ComboboxPopup align="start" sideOffset={6} className="w-72">
             <ComboboxSearchInput
+              aria-label={gt("Search projects")}
               placeholder={gt("Search projects…")}
               value={pickerQuery}
               onChange={(event) => setPickerQuery(event.target.value)}
@@ -431,40 +487,12 @@ export function QuickComposerWindow() {
         ) : null}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label={gt("Send and open in T3 Code")}
-                onClick={() => composerRef.current?.submitWithIntent("foreground")}
-              />
-            }
-          >
-            <ArrowUpRightIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup>
-            <T>
-              Send and open in T3 Code (
-              <Var>
-                {formatShortcutLabel({
-                  key: "enter",
-                  modKey: true,
-                  shiftKey: true,
-                  ctrlKey: false,
-                  altKey: false,
-                  metaKey: false,
-                })}
-              </Var>
-              )
-            </T>
-          </TooltipPopup>
-        </Tooltip>
+      <div className="flex min-w-0 items-center gap-1">
+        {launchStatus}
         <Button
           size="icon-xs"
           variant="ghost"
+          className="shrink-0"
           aria-label={gt("Close Quick Composer")}
           onClick={() => void hidePopout()}
         >
@@ -477,6 +505,7 @@ export function QuickComposerWindow() {
   return (
     <main className="flex h-dvh w-full flex-col overflow-hidden bg-background">
       <ChatView
+        key={acceptedSendCount}
         routeKind="draft"
         draftId={QUICK_COMPOSER_DRAFT_ID}
         environmentId={draftSession.environmentId}
@@ -485,6 +514,10 @@ export function QuickComposerWindow() {
         quickComposer={{
           header,
           composerRef,
+          onDismiss: () => void hidePopout(),
+          sendDisabledReason: scratchPending ? gt("Switching to No project") : null,
+          sending: composerActivity.sending,
+          onBusyChange: setComposerActivity,
           onSendAccepted: handleSendAccepted,
         }}
       />

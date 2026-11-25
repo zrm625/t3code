@@ -81,6 +81,8 @@ import {
   collapseExpandedComposerCursor,
   composerRequiresModifier,
   composerSubmissionIntentForKey,
+  isQuickComposerOpenShortcut,
+  quickComposerSubmissionIntent,
   composerStateAtPromptEnd,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
@@ -152,7 +154,11 @@ import { useDictationSubmissionShortcut } from "../../speech/useDictationSubmiss
 import { useEnvironmentSpeechInput } from "../../speech/useEnvironmentSpeechInput";
 import { ComposerSpeechButton, ComposerSpeechRecordingPill } from "./ComposerSpeechButton";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
-import { shortcutLabelForCommand, type ShortcutMatchContext } from "../../keybindings";
+import {
+  formatShortcutLabel,
+  shortcutLabelForCommand,
+  type ShortcutMatchContext,
+} from "../../keybindings";
 import {
   type TerminalContextDraft,
   type TerminalContextSelection,
@@ -353,7 +359,6 @@ export interface ChatComposerHandle {
   stopDictation: () => Promise<void>;
   isDictating: () => boolean;
   canStartDictation: () => boolean;
-  submitWithIntent: (submissionIntent: ComposerSubmissionIntent) => void;
   getSendContext: () => {
     answeringPendingUserInput: boolean;
     prompt: string;
@@ -458,6 +463,15 @@ export interface ChatComposerProps {
   /** The new-thread strip names the permissions, so the controls row hides its chip. */
   permissionsShownInStrip: boolean;
   quickComposerMode?: boolean;
+  /** Escape the editor and its menus did not use; the Quick Composer hides on it. */
+  onQuickComposerDismiss?: (() => void) | undefined;
+  /**
+   * `busy`: a send in flight or held, or dictation, which the Quick Composer window must outlive.
+   * `sending`: a send in flight or held, which owns the window's destination until it settles.
+   */
+  onQuickComposerBusyChange?:
+    | ((activity: { readonly busy: boolean; readonly sending: boolean }) => void)
+    | undefined;
 
   promptRef: React.RefObject<string>;
   composerImagesRef: React.RefObject<ComposerImageAttachment[]>;
@@ -591,6 +605,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     promptRef,
     composerRef,
     quickComposerMode = false,
+    onQuickComposerDismiss,
+    onQuickComposerBusyChange,
     composerImagesRef,
     composerFilesRef,
     composerTerminalContextsRef,
@@ -2027,6 +2043,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
   });
   const { blocksSubmission: voiceInputActive, submitAfterDictation } = speechInput;
+  const quickComposerSending = isSendBusy || composerSendHeld;
+  const quickComposerBusy = quickComposerSending || voiceInputActive || speechInput.preparing;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the Quick Composer window forwards busy to the desktop main process, which must not tear the window down mid-send or mid-dictation, and locks its destination while sending
+  useEffect(() => {
+    onQuickComposerBusyChange?.({ busy: quickComposerBusy, sending: quickComposerSending });
+  }, [onQuickComposerBusyChange, quickComposerBusy, quickComposerSending]);
   // A compact footer gives the dictation capsule the whole row beside the send button.
   const dictationTakesFooter = isComposerFooterCompact && speechInput.state.phase !== "idle";
   const submissionTarget = activePendingProgress ? "pending-user-input" : "provider-turn";
@@ -2462,7 +2484,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     enabled: voiceInputActive && !speechInput.preparing,
     formRef: composerFormRef,
     onKeyDown: (event) => {
-      const intent = composerSubmissionIntentForKey({
+      const keyIntent = composerSubmissionIntentForKey({
         event,
         keybindings,
         context: getShortcutContext(event.target),
@@ -2472,6 +2494,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         sendShortcut: settings.sendShortcut,
         prompt: promptRef.current,
       });
+      const intent = quickComposerMode
+        ? quickComposerSubmissionIntent(event, keyIntent)
+        : keyIntent;
       if (!intent) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -2503,6 +2528,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   };
   const handleSubmitMessageStable = useStableCallback(handleSubmitMessage);
+  const submitWithOpenStable = useStableCallback(() => {
+    submitComposer(undefined, undefined, "foreground");
+  });
   const submitCitationAndSend = () => {
     return submitComposer(
       undefined,
@@ -2590,18 +2618,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       cancelHeldSend();
       return true;
     }
-    if (
-      quickComposerMode &&
-      key === "Enter" &&
-      !event.isComposing &&
-      event.shiftKey &&
-      (event.metaKey || event.ctrlKey)
-    ) {
+    if (quickComposerMode && key === "Enter" && isQuickComposerOpenShortcut(event)) {
       event.preventDefault();
       submitComposer(event, undefined, "foreground");
       return true;
     }
-    return composerCommandKeyHandler({
+    const handled = composerCommandKeyHandler({
       keybindings,
       getShortcutContext,
       sendShortcut: settings.sendShortcut,
@@ -2636,10 +2658,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       resolveActiveComposerTrigger,
       readComposerSnapshot,
       applyPromptReplacement,
-      submitComposer,
+      submitComposer: quickComposerMode
+        ? (sendEvent, dispatchMode, intent) =>
+            submitComposer(
+              sendEvent,
+              dispatchMode,
+              quickComposerSubmissionIntent(null, intent) ?? intent,
+            )
+        : submitComposer,
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
     })(key, event, isTaskItem);
+    if (handled) return true;
+    if (
+      key === "Escape" &&
+      onQuickComposerDismiss &&
+      !event.isComposing &&
+      event.keyCode !== 229 &&
+      !event.repeat &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !voiceInputActive
+    ) {
+      onQuickComposerDismiss();
+      return true;
+    }
+    return false;
   };
 
   const {
@@ -3449,9 +3495,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       isDictating: () => voiceInputActive,
       canStartDictation: () => speechInput.available && !dictationDisabled && !voiceInputActive,
-      submitWithIntent: (intent) => {
-        submitComposer(undefined, undefined, intent);
-      },
       isModelPickerOpen: () => isComposerModelPickerOpen,
       isCaretAtStart: () => {
         const range = composerEditorRef.current?.readSelectionRange();
@@ -4165,6 +4208,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     hideCompactToggle={dictationTakesFooter}
                     keepFullHistory={props.keepFullHistory}
                     onToggleKeepFullHistory={props.onToggleKeepFullHistory}
+                    sendAndOpen={
+                      quickComposerMode
+                        ? {
+                            sendShortcutLabel: formatShortcutLabel({
+                              key: "enter",
+                              modKey: composerRequiresModifier(settings.sendShortcut, prompt),
+                              shiftKey: false,
+                              ctrlKey: false,
+                              altKey: false,
+                              metaKey: false,
+                            }),
+                            shortcutLabel: formatShortcutLabel({
+                              key: "enter",
+                              modKey: true,
+                              shiftKey: true,
+                              ctrlKey: false,
+                              altKey: false,
+                              metaKey: false,
+                            }),
+                            onSubmit: submitWithOpenStable,
+                          }
+                        : null
+                    }
                   >
                     {speechInput.available ? (
                       <>

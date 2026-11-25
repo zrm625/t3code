@@ -84,11 +84,14 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   onDismiss,
   errorClass,
   errorCode,
+  inline = false,
 }: {
   error: string | null;
   errorClass?: OrchestrationV2ProviderFailureClass | null;
   errorCode?: string | null;
   onDismiss?: () => void;
+  /** Takes its own row in a short window instead of floating over the top of the chat. */
+  inline?: boolean;
 }) {
   const gt = useGT();
   if (!error) return null;
@@ -96,8 +99,20 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   const chatGptLimit = workspaceLimit || errorCode === CHATGPT_USAGE_LIMIT_CODE;
   const variant = errorClass === "usage_limit" || chatGptLimit ? "warning" : "error";
   return (
-    <div className="pointer-events-auto mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
-      <Alert variant={variant} surface="glass" controlAlignment="first-line" data-variant={variant}>
+    <div
+      className={
+        inline
+          ? "pointer-events-auto"
+          : "pointer-events-auto mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3"
+      }
+    >
+      <Alert
+        variant={variant}
+        surface={inline ? "default" : "glass"}
+        controlAlignment="first-line"
+        data-variant={variant}
+        size={inline ? "sm" : "default"}
+      >
         {chatGptLimit ? (
           <OpenAI className="size-4 text-foreground!" aria-hidden="true" />
         ) : (
@@ -117,6 +132,11 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
                 </p>
               ) : null}
             </div>
+          ) : inline ? (
+            // A long error scrolls in place so the window keeps its project, prompt and send row.
+            <p className="max-h-12 overflow-y-auto whitespace-pre-wrap break-words">
+              {getThreadErrorBannerMessage(error)}
+            </p>
           ) : (
             <ExpandableText text={error} collapsedText={getThreadErrorBannerMessage(error)} />
           )}

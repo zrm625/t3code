@@ -123,6 +123,7 @@ export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
+export const QUICK_COMPOSER_DRAFT_ID: DraftId = DraftId.make("quick-composer");
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 
@@ -1647,7 +1648,8 @@ export function resolveComposerDraftKey(
     for (const [draftId, draftSession] of Object.entries(state.draftThreadsByThreadKey)) {
       if (
         draftSession.environmentId === normalizedTarget.environmentId &&
-        draftSession.threadId === normalizedTarget.threadId
+        draftSession.threadId === normalizedTarget.threadId &&
+        !draftSession.standalone
       ) {
         return draftId;
       }
@@ -2059,7 +2061,10 @@ function normalizePersistedDraftThreads(
               ),
             }
           : {}),
-        ...(candidateDraftThread.standalone === true ? { standalone: true } : {}),
+        // Older builds saved the reserved Quick Composer slot without its standalone flag.
+        ...(candidateDraftThread.standalone === true || threadKey === QUICK_COMPOSER_DRAFT_ID
+          ? { standalone: true }
+          : {}),
         promotedTo,
       };
     }
@@ -2846,6 +2851,7 @@ function toHydratedDraftThreadState(
     ...(persistedDraftThread.worktreeRepositories
       ? { worktreeRepositories: persistedDraftThread.worktreeRepositories }
       : {}),
+    ...(persistedDraftThread.standalone ? { standalone: true } : {}),
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2907,7 +2913,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
           }
           for (const [draftId, draftThread] of Object.entries(state.draftThreadsByThreadKey)) {
-            if (isDraftThreadPromoting(draftThread)) {
+            if (isDraftThreadPromoting(draftThread) || draftThread.standalone) {
               continue;
             }
             if (
@@ -2924,7 +2930,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           for (const draftSession of Object.values(get().draftThreadsByThreadKey)) {
             if (
               draftSession.environmentId === threadRef.environmentId &&
-              draftSession.threadId === threadRef.threadId
+              draftSession.threadId === threadRef.threadId &&
+              !draftSession.standalone
             ) {
               return draftSession;
             }
@@ -2935,7 +2942,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           for (const [draftId, draftSession] of Object.entries(get().draftThreadsByThreadKey)) {
             if (
               draftSession.environmentId === threadRef.environmentId &&
-              draftSession.threadId === threadRef.threadId
+              draftSession.threadId === threadRef.threadId &&
+              !draftSession.standalone
             ) {
               return DraftId.make(draftId);
             }
@@ -2958,7 +2966,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           ),
         hasDraftThreadsInEnvironment: (environmentId) =>
           Object.values(get().draftThreadsByThreadKey).some(
-            (draftThread) => draftThread.environmentId === environmentId,
+            (draftThread) => draftThread.environmentId === environmentId && !draftThread.standalone,
           ),
         setLogicalProjectDraftThreadId: (logicalProjectKey, projectRef, draftId, options) => {
           const normalizedLogicalProjectKey = logicalProjectDraftKey(logicalProjectKey);

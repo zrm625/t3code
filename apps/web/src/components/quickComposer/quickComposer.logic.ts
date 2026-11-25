@@ -2,10 +2,8 @@ import { EnvironmentId, ProjectId, type ScopedProjectRef } from "@t3tools/contra
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import * as Schema from "effect/Schema";
 
-import { DraftId } from "../../composerDraftStore";
 import type { Project } from "../../types";
 
-export const QUICK_COMPOSER_DRAFT_ID: DraftId = DraftId.make("quick-composer");
 export const QUICK_COMPOSER_LAST_TARGET_STORAGE_KEY = "t3code:quick-composer-last-target:v1";
 
 const PersistedQuickComposerTarget = Schema.Struct({

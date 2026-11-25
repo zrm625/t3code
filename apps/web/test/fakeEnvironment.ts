@@ -614,6 +614,10 @@ export function installFakeEnvironment(
     /** Commands left unanswered even when accepting, until `rejectPendingCommand`. */
     readonly holdCommand?: (command: OrchestrationV2Command) => boolean;
     readonly providers?: ReadonlyArray<unknown>;
+    /** Offers scratch sessions; serve the project with `extraProjects` titled after the root. */
+    readonly scratchWorkspaceRoot?: string;
+    /** Serves only `extraProjects`, so an environment can start with none. */
+    readonly omitDefaultProject?: boolean;
   },
 ): Disposable {
   threads = fixtures;
@@ -623,16 +627,15 @@ export function installFakeEnvironment(
       fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
     ),
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
+    ...(options?.scratchWorkspaceRoot
+      ? { scratchWorkspaceRoot: options.scratchWorkspaceRoot }
+      : {}),
   };
   dispatched = [];
   acceptCommands = options?.acceptCommands === true;
   projects = [
-    project,
-    ...(options?.extraProjects ?? []).map((extra) => ({
-      ...project,
-      ...extra,
-      workspaceRoot: `/workspace/${extra.title}`,
-    })),
+    ...(options?.omitDefaultProject ? [] : [project]),
+    ...(options?.extraProjects ?? []).map(projectShellOf),
   ];
   holdCommand = options?.holdCommand ?? (() => false);
   globalThis.fetch = async (input, init) => {
@@ -664,6 +667,34 @@ export function installFakeEnvironment(
       pendingDispatches = [];
       pendingAssetUrls = [];
     },
+  };
+}
+
+function projectShellOf(
+  extra: Pick<OrchestrationProjectShell, "id" | "title">,
+): OrchestrationProjectShell {
+  return { ...project, ...extra, workspaceRoot: `/workspace/${extra.title}` };
+}
+
+/** Adds a project, as the server does when one is created after the app connected. */
+export async function emitProject(
+  extra: Pick<OrchestrationProjectShell, "id" | "title">,
+): Promise<void> {
+  if (shellSubscriber === null) throw new Error("No shell subscription");
+  const shell = projectShellOf(extra);
+  projects = [...projects, shell];
+  sequence += 1;
+  await Effect.runPromise(
+    Queue.offer(shellSubscriber, { kind: "project.updated", sequence, project: shell }),
+  );
+}
+
+/** The server's reply to launching a new thread, which has no runs yet. */
+export function launchResult(threadId: ThreadId) {
+  return {
+    threadId,
+    projection: projectionOf({ id: threadId, title: "New thread", runs: [], items: [] }),
+    resumed: false,
   };
 }
 
