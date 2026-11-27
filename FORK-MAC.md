@@ -6,14 +6,14 @@ order. Run each check, and stop and report to Zak when one fails. Zak prefers sh
 
 ## This build
 
-The `integration` branch of github.com/zrm625/t3code, refreshed on 2026-11-25:
+The `integration` branch of github.com/zrm625/t3code, refreshed on 2026-11-27:
 
-- Base Nightly is `0.1.13-nightly.20261125.5245` at upstream commit `1c3f0ee88fc75440e173704cf45eae4d15f2cf95`.
+- Base Nightly is `0.1.14-nightly.20261127.5332` at upstream commit `958c26f0bfc3bd38d921944e88a4aa9799f2334b`.
 - Fork PR #1 uses the bundled `t3 mcp-bridge` command for the marketplace plugin.
 - Fork PR #2 fixes GitHub Enterprise Server pull request reads. Nightly includes the Codex Full Access approval fix.
 - Fork PR #4 adds Quick Composer. Enable its shortcut in **Settings → Quick Composer**.
-- The build commands pin commit `e553177021fef2336da69baf6176bae139672c7c`.
-- The local version is `0.1.13-preview.20261125.5245.ge553177021fe`. This preview keeps the Beta app name and has no update feed.
+- The build commands pin commit `0ff0083a74e4f926b9cfcdb0bec6d2d8f0dcfc8e`.
+- The local version is `0.1.13-preview.20261125.5245.g0ff0083a74e4`. This preview keeps the Beta app name and has no update feed.
 
 ## Rules
 
@@ -55,7 +55,7 @@ vp --version                 # Vite+; if missing: curl -fsSL https://vite.plus |
 defaults read "/Applications/T3 Code (Nightly).app/Contents/Info" CFBundleShortVersionString
 ```
 
-The last command must print `0.1.13-nightly.20261125.5245`.
+The last command must print `0.1.14-nightly.20261127.5332`.
 
 - **Older:** stop. Ask Zak to update Nightly, start it once, and tell you when it's done.
 - **Newer:** stop. Refresh the fork's integration branch against that Nightly's source and update
@@ -69,11 +69,11 @@ Use a checkout outside `~/.t3`, for example `~/src/t3code-fork`:
 git clone https://github.com/pingdotgg/t3code.git ~/src/t3code-fork   # skip if it already exists
 cd ~/src/t3code-fork
 git fetch https://github.com/zrm625/t3code.git integration
-git switch --detach e553177021fef2336da69baf6176bae139672c7c
-git merge-base --is-ancestor 1c3f0ee88fc75440e173704cf45eae4d15f2cf95 HEAD && echo base-ok
+git switch --detach 0ff0083a74e4f926b9cfcdb0bec6d2d8f0dcfc8e
+git merge-base --is-ancestor 958c26f0bfc3bd38d921944e88a4aa9799f2334b HEAD && echo base-ok
 vp i
-vp run dist:desktop:dmg --arch arm64 --build-version 0.1.13-preview.20261125.5245.ge553177021fe
-ls release/T3-Code-0.1.13-preview.20261125.5245.ge553177021fe-arm64.dmg
+vp run dist:desktop:dmg --arch arm64 --build-version 0.1.13-preview.20261125.5245.g0ff0083a74e4
+ls release/T3-Code-0.1.13-preview.20261125.5245.g0ff0083a74e4-arm64.dmg
 ```
 
 Check: `base-ok` is printed, and the named DMG exists. The build stops
@@ -95,7 +95,7 @@ step.
 ## 4. Install the app
 
 ```sh
-hdiutil attach release/T3-Code-0.1.13-preview.20261125.5245.ge553177021fe-arm64.dmg -nobrowse -mountpoint /tmp/t3-fork-dmg
+hdiutil attach release/T3-Code-0.1.13-preview.20261125.5245.g0ff0083a74e4-arm64.dmg -nobrowse -mountpoint /tmp/t3-fork-dmg
 ditto "/tmp/t3-fork-dmg/T3 Code (Beta).app" "/Applications/T3 Code (Beta).app"
 hdiutil detach /tmp/t3-fork-dmg
 ```
@@ -130,7 +130,7 @@ Tell Zak, in this order:
 1. Quit T3 Code (Nightly).
 2. Open T3 Code (Beta) from Applications.
 3. If you did step 5, open **Settings → About** in Beta and select **Install** next to **t3 command**.
-   Open a new terminal and check that `t3 --version` prints `0.1.13-preview.20261125.5245.ge553177021fe`.
+   Open a new terminal and check that `t3 --version` prints `0.1.13-preview.20261125.5245.g0ff0083a74e4`.
    If a provider still points to the older `t3-codex` or `t3-claude` wrapper, restore its usual binary path in **Settings → Providers**.
 4. To go back: quit T3 Code (Beta), open T3 Code (Nightly).
 5. If something breaks: quit both, move `~/.t3/userdata` aside, and copy the backup from step 3 back
@@ -139,7 +139,7 @@ Tell Zak, in this order:
 ## 7. Check it works (Zak, or an agent inside the Beta app)
 
 - **The right app is running.** In T3 Code (Beta), About shows version
-  `0.1.13-preview.20261125.5245.ge553177021fe` and build commit `e553177021fe`.
+  `0.1.13-preview.20261125.5245.g0ff0083a74e4` and build commit `0ff0083a74e4`.
 - **The plugin works (if you did step 5).** Start a new thread on Claude Haiku or Codex Luna and
   send: "Call the T3 Code tool t3_project_list once and reply with the number of projects."
   - A number: the plugin works.
