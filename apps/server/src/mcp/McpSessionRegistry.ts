@@ -13,6 +13,7 @@ import * as NetAddress from "effect/net/NetAddress";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import { routineSpan } from "@t3tools/shared/observability";
 
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
@@ -263,16 +264,16 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     return record === undefined ? undefined : yield* resolveRecord(record.tokenHash);
   });
 
-  const resolve: McpSessionRegistryShape["resolve"] = Effect.fn("McpSessionRegistry.resolve")(
-    function* (rawToken, bridgeRequest) {
-      if (rawToken.length === 0) return undefined;
-      const tokenHash = yield* hashToken(rawToken);
-      const bridge = bridges.get(tokenHash);
-      return bridge === undefined
-        ? yield* resolveRecord(tokenHash)
-        : yield* resolveBridge(bridge, bridgeRequest);
-    },
-  );
+  const resolve: McpSessionRegistryShape["resolve"] = Effect.fn("McpSessionRegistry.resolve", {
+    attributes: routineSpan,
+  })(function* (rawToken, bridgeRequest) {
+    if (rawToken.length === 0) return undefined;
+    const tokenHash = yield* hashToken(rawToken);
+    const bridge = bridges.get(tokenHash);
+    return bridge === undefined
+      ? yield* resolveRecord(tokenHash)
+      : yield* resolveBridge(bridge, bridgeRequest);
+  });
 
   const touch: McpSessionRegistryShape["touch"] = Effect.fn("McpSessionRegistry.touch")(
     function* (threadId) {
